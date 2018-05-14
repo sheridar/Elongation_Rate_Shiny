@@ -210,32 +210,57 @@ ui <- fluidPage(
   # App title ----
   titlePanel("Uploading Files"),
   
-  # Sidebar layout with input and output definitions ----
-  sidebarLayout(
-    
-    # Sidebar panel for inputs ----
-    sidebarPanel(
-      
-      # Input: Select a file ----
+  fluidRow(
+    column(4,
       fileInput(
-        "bed_files", "Select bed files",
-        multiple = T,
+        "file_1", "Select bed files",
+        multiple = F,
         accept = c("text/tsv", ".bed")
-      ),
-      
-      textInput("name_text", "File names"),
-      
-      actionButton("goButton", "Go!")
+      )
     ),
     
-    # Main panel for displaying outputs ----
-    mainPanel(
-    
-      # Output: Data file ----
-      tableOutput("contents")
-    
+    column(3, 
+      textInput("name_1", "File name")
     )
-  )   
+  ),
+  
+  fluidRow(
+    column(4,
+      fileInput(
+        "file_2", label = NULL,
+        multiple = F,
+        accept = c("text/tsv", ".bed")
+      )
+    ),
+    
+    column(3, 
+      textInput("name_2", label = NULL)
+    )
+  ),
+  
+  fluidRow(
+    column(4,
+      fileInput(
+        "file_3", label = NULL,
+        multiple = F,
+        accept = c("text/tsv", ".bed")
+      )
+    ),
+    
+    column(3, 
+      textInput("name_3", label = NULL)
+    )
+  ),
+  
+  fluidRow(
+    column(5,
+      actionLink("runAnalysis", "Run analysis")
+    )
+  ),
+  
+  mainPanel(
+    tableOutput("contents")
+  )
 )
 
 # Define server logic to read selected file ----
@@ -245,58 +270,47 @@ server <- function(input, output) {
   
   output$contents <- renderTable({
     
-    # input$file1 will be NULL initially. After the user selects
-    # and uploads a file, head of that data file by default,
-    # or all rows if selected, will be shown.
-    
-    #req(
-      #input$bed_files,
-      #input$name_text
-    #)
-    
-    # when reading semicolon separated files,
-    # having a comma separator causes `read.csv` to error
-    tryCatch(
-      {
-        col_names <- c(
-          "chrom", "start",
-          "end", "name",
-          "win_id", "strand",
-          "count"
-        )
-        
-        # Imported files and added names 
-        file_list <- map(input$bed_file$datapath, function(x) read_tsv(x, col_names))
-        
-        
-        output$value <- renderText({ input$name_text })
-        
-        #input$goButton
-        
-        #file_names <- str_split(name_text, ", ")[[1]]
-        #names(file_list) <- file_names
-        
-        # Merged tables
-        #file_merge <- DRB_merge(file_list, win_num = 250, win_min = 51, win_max = 195)
-        
-        # Input file 
-        #file_norm <- norm_DRB(file_merge, win_max = 195)
-      
-        #waves <- run_find_edge(file_norm)
-        
-      },
-      
-      error = function(e) {
-        # return a safeError if a parsing error occurs
-        stop(safeError(e))
-      }
+    col_names <- c(
+      "chrom", "start",
+      "end", "name",
+      "win_id", "strand",
+      "count"
     )
     
-    return(name_text)
+    #if (!is.null(input$file_1$datapath)) {
+    df_1 <- read_tsv(input$file_1$datapath, col_names)
+    #}
+    
+    head(df_1)
+    
+    observeEvent(input$runAnalysis, {
+      
+      head(df_1, n = 20)
+      
+      #file_list <- c(input$file_1$datapath, input$file_2$datapath, input$file_2$datapath)
+      #file_list
+      
+      # Imported files and added names 
+      #df_list <- map(file_list, function(x) read_tsv(x, col_names))
+      
+      #head(df_list)
+      
+      #file_names <- str_split(name_text, ", ")[[1]]
+      #names(file_list) <- file_names
+      # Merged tables
+      #df_merge <- DRB_merge(df_list, win_num = 250, win_min = 51, win_max = 195)
+      # Input file 
+      #file_norm <- norm_DRB(file_merge, win_max = 195)
+      
+      #waves <- run_find_edge(file_norm)
+    })    
+    
+        
+    #return("done")
+    #return(name_text)
     #return(length(input$bed_files$datapath))
     #return(file_merge %>% head())
   })
-  
 }
 
 # Create Shiny app ----
@@ -305,7 +319,15 @@ shinyApp(ui, server)
 
 
 
-
+#column(2,
+       
+       # Main panel for displaying outputs ----
+#       mainPanel(
+         
+         # Output: Data file ----
+#         tableOutput("contents")
+#       )
+#)
 # Horizontal line ----
 #     tags$hr(),
 
