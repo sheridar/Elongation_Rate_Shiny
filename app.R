@@ -1,8 +1,7 @@
 
-library(tidyverse)
 library(depmixS4)
 library(shiny)
-
+library(tidyverse)
 
 
 # Function to add "key" columns to list of dfs
@@ -64,7 +63,7 @@ DRB_merge <- function(input, win_num, win_min = 1, win_max = win_num) {
 }
 
 # Function to normalize signal
-norm_DRB <- function(input_file, win_max) {
+DRB_norm <- function(input_file, win_max) {
   
   win_cutoff <- win_max - 5
   
@@ -175,7 +174,9 @@ find_edge <- function(input_file) {
 # Function to run find_edge()
 run_find_edge <- function(input_file) {
   
-  df <- input_file %>% spread(key, count)
+  df <- input_file %>% 
+    dplyr::select(-chrom, -start, -end) %>% 
+    spread(key, count) 
   
   name_cols <- df %>% dplyr::select(name, win_id) 
   
@@ -200,15 +201,10 @@ run_find_edge <- function(input_file) {
 }
 
 
-
-
-
-
 # Define UI for data upload app ----
 ui <- fluidPage(
   
-  # App title ----
-  titlePanel("Uploading Files"),
+  titlePanel("Elongation rate calculator"),
   
   fluidRow(
     column(4,
@@ -221,6 +217,14 @@ ui <- fluidPage(
     
     column(3, 
       textInput("name_1", "File name")
+    ),
+    
+    column(4,
+      fileInput(
+        "gene_list", "Select gene list",
+        multiple = F,
+        accept = c("text/tsv", ".txt")
+      )
     )
   ),
   
@@ -268,101 +272,50 @@ server <- function(input, output) {
   
   options(shiny.maxRequestSize = 500 * 1024 ^ 2)
   
-  output$contents <- renderTable({
-    
-    col_names <- c(
-      "chrom", "start",
-      "end", "name",
-      "win_id", "strand",
-      "count"
-    )
-    
-    #if (!is.null(input$file_1$datapath)) {
-    df_1 <- read_tsv(input$file_1$datapath, col_names)
-    #}
-    
-    head(df_1)
-    
-    observeEvent(input$runAnalysis, {
-      
-      head(df_1, n = 20)
-      
-      #file_list <- c(input$file_1$datapath, input$file_2$datapath, input$file_2$datapath)
-      #file_list
-      
-      # Imported files and added names 
-      #df_list <- map(file_list, function(x) read_tsv(x, col_names))
-      
-      #head(df_list)
-      
-      #file_names <- str_split(name_text, ", ")[[1]]
-      #names(file_list) <- file_names
-      # Merged tables
-      #df_merge <- DRB_merge(df_list, win_num = 250, win_min = 51, win_max = 195)
-      # Input file 
-      #file_norm <- norm_DRB(file_merge, win_max = 195)
-      
-      #waves <- run_find_edge(file_norm)
-    })    
-    
+  tryCatch(
+    {
+      table_out <- eventReactive(input$runAnalysis, ignoreInit = T, {
+          
+        req(input$file_1)
+        req(input$name_1)
         
-    #return("done")
-    #return(name_text)
-    #return(length(input$bed_files$datapath))
-    #return(file_merge %>% head())
-  })
+        col_names <- c(
+          "chrom", "start",
+          "end", "name",
+          "win_id", "strand",
+          "count"
+        )
+    
+        file_list <- list(input$file_1$datapath, input$file_2$datapath)
+        name_list <- list(input$name_1, input$name_2)
+        
+        df_list <- map(file_list, function(x) read_tsv(x, col_names))
+        names(df_list) <- name_list
+        
+        gene_list <- read_tsv(input$gene_list$datapath, "name")
+        
+        df_merge <- DRB_merge(df_list, win_num = 250, win_min = 51, win_max = 195) %>%
+          semi_join(gene_list, by = "name")
+        
+        df_norm <- DRB_norm(df_merge, win_max = 195)
+        
+        waves <- run_find_edge(df_norm) %>% tbl_df() 
+        
+        head(waves)
+      })
+          
+      output$contents <- renderTable({
+        table_out()
+      })
+    },
+  
+    # return a safeError if a parsing error occurs
+    error = function(e) {
+      stop(safeError(e))
+    }
+  )
 }
 
 # Create Shiny app ----
 shinyApp(ui, server)
-
-
-
-
-#column(2,
-       
-       # Main panel for displaying outputs ----
-#       mainPanel(
-         
-         # Output: Data file ----
-#         tableOutput("contents")
-#       )
-#)
-# Horizontal line ----
-#     tags$hr(),
-
-# Input: Select separator ----
-#      radioButtons("sep", "Separator",
-#                   choices = c(Comma = ",",
-#                               Semicolon = ";",
-#                               Tab = "\t"),
-#                   selected = ","),
-
-# Input: Select quotes ----
-#      radioButtons("quote", "Quote",
-#                   choices = c(None = "",
-#                               "Double Quote" = '"',
-#                               "Single Quote" = "'"),
-#                   selected = '"'),
-
-# Horizontal line ----
-#     tags$hr(),
-
-# Input: Select number of rows to display ----
-#      radioButtons("disp", "Display",
-#                   choices = c(Head = "head",
-#                              All = "all"),
-#                   selected = "head")
-
-#    ),
-#  )
-#)
-
-
-
-
-
-
-
-
 
