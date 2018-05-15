@@ -1,7 +1,9 @@
 
 library(depmixS4)
+library(DT)
 library(shiny)
 library(tidyverse)
+library(magrittr)
 
 # Function to add "key" columns to list of dfs ----
 add_key <- function(input) {
@@ -36,7 +38,7 @@ tbl_merge <- function(input, merge_by = "name") {
 }
 
 # Function to merge tables ---- 
-DRB_merge <- function(input, win_num, win_min = 1, win_max = win_num) {
+DRB_merge <- function(input, win_min = 1, win_max = 200) {
   
   # Selected columns and filtered 
   res <- map(input, function(x) {
@@ -44,9 +46,6 @@ DRB_merge <- function(input, win_num, win_min = 1, win_max = win_num) {
       dplyr::select(chrom, start, end, name, win_id, count) %>%
       group_by(name) %>%
       filter(
-        n() == win_num,
-        min(win_id) == 1,
-        max(win_id) == win_num,
         win_id >= win_min,
         win_id <= win_max
       ) %>%
@@ -123,8 +122,7 @@ find_edge <- function(input_file) {
     group_size() %>% 
     length()
   
-  table_sort <- input_file %>%
-    arrange(name, win_id)
+  table_sort <- input_file %>% arrange(name, win_id)
   name <- table_sort$name
   count <- table_sort$count
   res <- rep(NA, tot_gene)
@@ -155,7 +153,7 @@ find_edge <- function(input_file) {
       }
     }
     
-    edge <- edge %>%
+    edge %<>%
       na.omit() %>%
       tail(1) 
     
@@ -199,30 +197,55 @@ run_find_edge <- function(input_file) {
   res
 }
 
+# Function to extract gene symbols ----
+extract_gene_symbol <- function(input_file) {
+  
+  get_last_name <- function(gene_string) {
+    res <- str_split(gene_string, "\\|")
+    
+    str_len <- length(res[[1]])
+    
+    res <- res[[1]][[str_len]]
+    
+    res
+  }
+  
+  gene_names <- input_file %>%
+    dplyr::select(name)
+  
+  other_data <- input_file %>%
+    dplyr::select(-name)
+  
+  gene_matrix <- as.matrix(gene_names)
+  
+  new_names <- map(gene_matrix, get_last_name)
+  
+  new_names <- data.frame(name = as.matrix(new_names)) %>%
+    mutate(name = as.character(name))
+  
+  res <- bind_cols(new_names, other_data)
+}
+
 
 # Define UI for data upload app ----
 ui <- fluidPage(
   
   titlePanel("Elongation rate calculator"),
   
+  column(12,
+  
   fluidRow(
     column(4,
       fileInput(
-        "file_1", "Select bed files",
-        multiple = F,
+        "file_1", "Timecourse data",
         accept = c("text/tsv", ".bed")
       )
     ),
     
-    column(3, 
-      textInput("name_1", "File name")
-    ),
-    
-    column(4,
-      fileInput(
-        "gene_list", "Select gene list",
-        multiple = F,
-        accept = c("text/tsv", ".txt")
+    column(2, 
+      numericInput(
+        "time_1", "Time (min)", 
+        10, min = 0, max = 999
       )
     )
   ),
@@ -231,39 +254,68 @@ ui <- fluidPage(
     column(4,
       fileInput(
         "file_2", label = NULL,
-        multiple = F,
         accept = c("text/tsv", ".bed")
       )
     ),
     
-    column(3, 
-      textInput("name_2", label = NULL)
-    )
+    column(2, 
+      numericInput(
+        "time_2", label = NULL, 
+        20, min = 1, max = 999
+      )
+    )  
   ),
-  
+
   fluidRow(
     column(4,
       fileInput(
-        "file_3", label = NULL,
-        multiple = F,
+        "control", "Control data",
         accept = c("text/tsv", ".bed")
       )
     ),
     
-    column(3, 
-      textInput("name_3", label = NULL)
+    column(2,
+      numericInput(
+        "win_min", "Window min",
+        1, min = 1, max = 200
+      )
+    )
+  ),
+    
+  fluidRow(
+    column(4,
+      fileInput(
+        "gene_list", "Gene list",
+        accept = c("text/tsv", ".txt")
+      )
+    ),
+    
+    column(2,
+      numericInput(
+        "win_max", "Window max",
+        200, min = 1, max = 200
+      )
     )
   ),
   
   fluidRow(
-    column(5,
-      actionLink("runAnalysis", "Run analysis")
-    )
-  ),
-  
-  mainPanel(
-    tableOutput("contents")
+    column(1, actionButton("runAnalysis", "RUN")),
+    column(1, downloadButton("download", "Export"))
   )
+  )
+  
+  #column(6, fileInput("test_file", "test_file"))
+  
+  #column(6, 
+  #  div(
+  #    DT::dataTableOutput("contents")
+      #style = "font-size: 75%; width: 75%; height:400px; text-overflow: ellipsis"
+  #  )
+  #)
+  
+  #mainPanel(
+  #  dataTableOutput("contents")
+  #)
 )
 
 
@@ -277,8 +329,12 @@ server <- function(input, output) {
       table_out <- eventReactive(input$runAnalysis, ignoreInit = T, {
           
         req(input$file_1)
-        req(input$name_1)
+        req(input$file_2)
+        req(input$time_1)
+        req(input$time_2)
         
+        
+        # Merged data tables 
         col_names <- c(
           "chrom", "start",
           "end", "name",
@@ -286,30 +342,83 @@ server <- function(input, output) {
           "count"
         )
     
-        file_list <- list(input$file_1$datapath, input$file_2$datapath)
-        name_list <- list(input$name_1, input$name_2)
-        
+        file_list <- list(input$file_1$datapath, input$file_2$datapath, input$control$datapath)
         df_list <- map(file_list, function(x) read_tsv(x, col_names))
+        
+        if (!is.null(input$gene_list)) {
+          gene_list <- read_tsv(input$gene_list$datapath, "name")
+          
+          df_list <- map(df_list, function(x){
+            x %>% semi_join(gene_list, by = "name") 
+          })
+        }
+        
+        df_list <- map(df_list, extract_gene_symbol) 
+        
+        name_list <- list("tm_1", "tm_2", "tm_con")
+        name_list <- list("tm_con", "tm_1", "tm_2")
         names(df_list) <- name_list
         
-        gene_list <- read_tsv(input$gene_list$datapath, "name")
+        win_min <- input$win_min
+        win_max <- input$win_max 
         
-        df_merge <- DRB_merge(df_list, win_num = 250, win_min = 51, win_max = 195) %>%
-          semi_join(gene_list, by = "name")
         
-        df_norm <- DRB_norm(df_merge, win_max = 195)
+        # For testing win_min = 51, win_max = 195
+        df_merge <- DRB_merge(df_list, win_min = win_min, win_max = win_max)
         
-        waves <- run_find_edge(df_norm) %>% tbl_df() 
+        # Normalized values and identified waves
+        df_norm <- DRB_norm(df_merge, win_max = win_max)
         
-        head(waves)
+        waves <- run_find_edge(df_norm)
+        
+        
+        # Calculated elongation rates 
+        tm <- input$time_2 - input$time_1
+        
+        rates <- waves %>%
+          na.omit() %>% 
+          filter(tm_2 > tm_1) %>%
+          mutate(
+            tm_1 = tm_1 / 1000,
+            tm_2 = tm_2 / 1000,
+            rate = (tm_2 - tm_1) / tm,
+            rate = round(rate, digits = 1)
+          ) 
+        
+        tm1_name <- str_c(input$time_1, "min")
+        tm2_name <- str_c(input$time_2, "min")
+        
+        colnames(rates) <- c("Name", tm1_name, tm2_name, "Rate (kb/min)")
+        
+        rates
+        
       })
-          
-      output$contents <- renderTable({
+        
+      
+      # Print table   
+      output$contents <- renderDataTable({
         table_out()
-      })
+      },
+      options = list(
+        autoWidth = TRUE,
+        columnDefs = list(list(width = '75px', targets = "_all"))
+      ))
+      
+      
+      # Download table
+      output$download <- downloadHandler(
+        filename = function() {
+          paste("data-", Sys.Date(), ".txt", sep="")
+        },
+        
+        content = function(file) {
+          write_tsv(table_out(), path = file)
+        }
+      )
     },
   
-    # return a safeError if a parsing error occurs
+    
+    # Return a safeError if a parsing error occurs
     error = function(e) {
       stop(safeError(e))
     }
