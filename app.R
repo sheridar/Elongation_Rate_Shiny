@@ -232,90 +232,84 @@ ui <- fluidPage(
   
   titlePanel("Elongation rate calculator"),
   
-  column(12,
+  column(6,
   
-  fluidRow(
-    column(4,
-      fileInput(
-        "file_1", "Timecourse data",
-        accept = c("text/tsv", ".bed")
+    fluidRow(
+      column(8,
+        fileInput(
+          "file_1", "Timecourse data",
+          accept = c("text/tsv", ".bed")
+        )
+      ),
+    
+      column(4, 
+        numericInput(
+          "time_1", "Time (min)", 
+          10, min = 0, max = 999
+        )
       )
     ),
-    
-    column(2, 
-      numericInput(
-        "time_1", "Time (min)", 
-        10, min = 0, max = 999
-      )
-    )
-  ),
   
-  fluidRow(
-    column(4,
-      fileInput(
-        "file_2", label = NULL,
-        accept = c("text/tsv", ".bed")
-      )
-    ),
+    fluidRow(
+      column(8,
+        fileInput(
+          "file_2", label = NULL,
+          accept = c("text/tsv", ".bed")
+        )
+      ),
     
-    column(2, 
-      numericInput(
-        "time_2", label = NULL, 
-        20, min = 1, max = 999
-      )
-    )  
-  ),
+      column(4, 
+        numericInput(
+          "time_2", label = NULL, 
+          20, min = 1, max = 999
+        )
+      )  
+    ),
 
-  fluidRow(
-    column(4,
-      fileInput(
-        "control", "Control data",
-        accept = c("text/tsv", ".bed")
+    fluidRow(
+      column(8,
+        fileInput(
+          "control", "Control data",
+          accept = c("text/tsv", ".bed")
+        )
+      ),
+    
+      column(4,
+        numericInput(
+          "win_min", "Window min",
+          1, min = 1, max = 200
+        )
       )
     ),
     
-    column(2,
-      numericInput(
-        "win_min", "Window min",
-        1, min = 1, max = 200
-      )
-    )
-  ),
+    fluidRow(
+      column(8,
+        fileInput(
+          "gene_list", "Gene list",
+          accept = c("text/tsv", ".txt")
+        )
+      ),
     
-  fluidRow(
-    column(4,
-      fileInput(
-        "gene_list", "Gene list",
-        accept = c("text/tsv", ".txt")
+      column(4,
+        numericInput(
+          "win_max", "Window max",
+          200, min = 1, max = 200
+        )
       )
     ),
     
-    column(2,
-      numericInput(
-        "win_max", "Window max",
-        200, min = 1, max = 200
-      )
+    fluidRow(
+      column(2, actionButton("runAnalysis", "RUN")),
+      column(2, downloadButton("download", "Export"))
     )
   ),
   
-  fluidRow(
-    column(1, actionButton("runAnalysis", "RUN")),
-    column(1, downloadButton("download", "Export"))
+  column(6, 
+    div(
+      DT::dataTableOutput("contents"),
+      style = "font-size: 75%; text-overflow: ellipsis"
+    )
   )
-  )
-  
-  #column(6, fileInput("test_file", "test_file"))
-  
-  #column(6, 
-  #  div(
-  #    DT::dataTableOutput("contents")
-      #style = "font-size: 75%; width: 75%; height:400px; text-overflow: ellipsis"
-  #  )
-  #)
-  
-  #mainPanel(
-  #  dataTableOutput("contents")
-  #)
 )
 
 
