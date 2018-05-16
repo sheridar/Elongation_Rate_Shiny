@@ -323,7 +323,7 @@ server <- function(input, output) {
   
   tryCatch(
     {
-      table_out <- eventReactive(input$runAnalysis, ignoreInit = T, {
+      tablesOut <- eventReactive(input$runAnalysis, ignoreInit = T, {
           
         req(input$file_1)
         req(input$file_2)
@@ -362,9 +362,9 @@ server <- function(input, output) {
         # For testing win_min = 51, win_max = 195
         df_merge <- DRB_merge(df_list, win_min = win_min, win_max = win_max)
         
+        
         # Normalized values and identified waves
         df_norm <- DRB_norm(df_merge, win_max = win_max)
-        
         waves <- run_find_edge(df_norm)
         
         
@@ -386,14 +386,14 @@ server <- function(input, output) {
         
         colnames(rates) <- c("Name", tm1_name, tm2_name, "Rate (kb/min)")
         
-        rates
+        list(rates, df_merge)
       })
         
       
       # Print table   
       output$rateTable <- renderDataTable(
         datatable(
-          table_out(),
+          tablesOut()[[1]],
           selection = list(mode = "single")
           #caption = "Filtered Table (based on cyl)"
         )
@@ -401,25 +401,59 @@ server <- function(input, output) {
       
       rateTable_selected <- reactive({
         ids <- input$rateTable_rows_selected
-        table_out()[ids, 1]
+        gene_name <- tablesOut()[[1]][ids, 1]
+        wave_1    <- tablesOut()[[1]][ids, 2]
+        wave_2    <- tablesOut()[[1]][ids, 3]
+        rate      <- tablesOut()[[1]][ids, 4]
+        list(gene_name, wave_1, wave_2, rate)
       })
       
-      
       # Plot data for selected gene 
-      plot_out <- eventReactive(input$plotSelected, ignoreInit = T, {
-        gene_target <- as.character(rateTable_selected())
+      plotOut <- eventReactive(input$plotSelected, ignoreInit = T, {
         
-        # ADD PLOT DETAILS HERE 
+        # Gene target
+        gene_text <- as.character(rateTable_selected()[[1]])
+        gene_target <- as_data_frame(gene_text) %>% 
+          dplyr::select(name = 1) 
         
+        # Input file 
+        df_merge <- as_data_frame(tablesOut()[[2]])
+        input_file <- df_merge %>% 
+          semi_join(gene_target, by = "name")
         
+        # Wave coordinates 
+        wave_1 <- as.numeric(rateTable_selected()[[2]])
+        wave_2 <- as.numeric(rateTable_selected()[[3]])
+        rate   <- as.character(rateTable_selected()[[4]])
         
+        # Plot colors 
+        plot_colors <- get_color(c("orange_1", "blue_2", "red_2"))
         
-        
-        
+        # Plotted data for selected gene 
+        input_file %>%
+          ggplot(aes(win_id, count, color = key)) +
+          geom_line(size = 2) +
+          labs(
+            title = gene_text,
+            subtitle = str_c(rate, " kb/min"),
+            x = "Distance from TSS (kb)",
+            y = "Signal"
+          ) +
+          theme_classic() +
+          theme(
+            plot.title = element_text(size = 35, face = "bold"),
+            plot.subtitle = element_text(size = 20),
+            axis.title = element_text(size = 20, face = "bold"),
+            axis.line = element_line(size = 2),
+            axis.ticks = element_line(size = 2),
+            axis.ticks.length = unit(10, units = "point"),
+            #axis.text = element_text(size = 15, face = "bold", color = "black")
+            axis.text = element_text(size = 15, color = "black")
+          )
       })
       
       output$genePlot <- renderPlot(
-          plot_out()
+          plotOut()
       )
   
       
@@ -430,7 +464,7 @@ server <- function(input, output) {
         },
         
         content = function(file) {
-          write_tsv(table_out(), path = file)
+          write_tsv(tablesOut()[[1]], path = file)
         }
       )
     },
