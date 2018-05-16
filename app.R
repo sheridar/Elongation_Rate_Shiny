@@ -300,16 +300,19 @@ ui <- fluidPage(
     
     fluidRow(
       column(2, actionButton("runAnalysis", "RUN")),
-      column(2, downloadButton("download", "Export"))
+      column(2, downloadButton("download", "Export")),
+      column(2, offset = 1, actionButton("plotSelected", "Plot"))
     )
   ),
   
   column(6, 
     div(
-      DT::dataTableOutput("contents"),
+      DT::dataTableOutput("rateTable"),
       style = "font-size: 75%; text-overflow: ellipsis"
     )
-  )
+  ),
+  
+  fluidRow(plotOutput("genePlot"))
 )
 
 
@@ -350,7 +353,6 @@ server <- function(input, output) {
         df_list <- map(df_list, extract_gene_symbol) 
         
         name_list <- list("tm_1", "tm_2", "tm_con")
-        name_list <- list("tm_con", "tm_1", "tm_2")
         names(df_list) <- name_list
         
         win_min <- input$win_min
@@ -385,19 +387,41 @@ server <- function(input, output) {
         colnames(rates) <- c("Name", tm1_name, tm2_name, "Rate (kb/min)")
         
         rates
-        
       })
         
       
       # Print table   
-      output$contents <- renderDataTable({
-        table_out()
-      },
-      options = list(
-        autoWidth = TRUE,
-        columnDefs = list(list(width = '75px', targets = "_all"))
-      ))
+      output$rateTable <- renderDataTable(
+        datatable(
+          table_out(),
+          selection = list(mode = "single")
+          #caption = "Filtered Table (based on cyl)"
+        )
+      )
       
+      rateTable_selected <- reactive({
+        ids <- input$rateTable_rows_selected
+        table_out()[ids, 1]
+      })
+      
+      
+      # Plot data for selected gene 
+      plot_out <- eventReactive(input$plotSelected, ignoreInit = T, {
+        gene_target <- as.character(rateTable_selected())
+        
+        # ADD PLOT DETAILS HERE 
+        
+        
+        
+        
+        
+        
+      })
+      
+      output$genePlot <- renderPlot(
+          plot_out()
+      )
+  
       
       # Download table
       output$download <- downloadHandler(
