@@ -5,7 +5,37 @@ library(shiny)
 library(tidyverse)
 library(magrittr)
 
-# Function to add "key" columns to list of dfs ----
+# Color list 
+color_list <- list(
+  purple_1 = "#253494",
+  orange_1 = "#fe9929",
+  orange_2 = "#ec7014",
+  brown_1  = "#cc4c02",
+  brown_2  = "#993404",
+  green_1  = "#78c679",
+  green_2  = "#41ab5d",
+  green_3  = "#238443",
+  blue_1 = "#3288bd",
+  blue_2 = "#225ea8",
+  blue_3 = "#08519c",
+  aqua_1 = "#41b6c4",
+  grey_1 = "#969696",
+  grey_2 = "#737373",
+  grey_3 = "#525252",
+  black  = "black",
+  red_1  = "#fc4e2a",
+  red_2  = "#e31a1c",
+  red_3  = "#bd0026"
+)
+
+# Function to retrieve colors from color_list
+get_color <- function(targets) {
+  as.character(color_list[targets])
+}
+
+# Functions ----
+
+# Function to add "key" columns to list of dfs
 add_key <- function(input) {
   
   tbl_list <- list()
@@ -23,7 +53,7 @@ add_key <- function(input) {
   tbl_list
 }
 
-# Function to merge tables ---- 
+# Function to merge tables
 tbl_merge <- function(input, merge_by = "name") {
   
   tbl_list <- add_key(input) 
@@ -37,7 +67,7 @@ tbl_merge <- function(input, merge_by = "name") {
   res
 }
 
-# Function to merge tables ---- 
+# Function to merge tables
 DRB_merge <- function(input, win_min = 1, win_max = 200) {
   
   # Selected columns and filtered 
@@ -60,8 +90,8 @@ DRB_merge <- function(input, win_min = 1, win_max = 200) {
   res
 }
 
-# Function to normalize signal ----
-DRB_norm <- function(input_file, win_max) {
+# Function to normalize signal
+DRB_norm <- function(input_file, win_min = 1, win_max = 200) {
   
   win_cutoff <- win_max - 5
   
@@ -105,49 +135,54 @@ DRB_norm <- function(input_file, win_max) {
       count = (count / max_count) * 2,
       count = floor(count / 0.05) / 20
     ) %>%
-    dplyr::select(-max_count)
-  
+    dplyr::select(-max_count) %>%
+    
+    # Converted win_id to distance (kb)
+    mutate(win_id = (win_id - win_min) * ((end - start) / 1000))
+    
   res
 }
 
-# Function to run depmix ----
+# Function to run depmix
 find_edge <- function(input_file) {
-  tot_win <- input_file %>% 
+  win_tot <- input_file %>% 
     group_by(win_id) %>% 
     group_size() %>% 
     length()
   
-  tot_gene <- input_file %>% 
+  gene_tot <- input_file %>% 
     group_by(name) %>% 
     group_size() %>% 
     length()
   
   table_sort <- input_file %>% arrange(name, win_id)
   name <- table_sort$name
+  win_id <- table_sort$win_id
   count <- table_sort$count
-  res <- rep(NA, tot_gene)
+  res <- rep(NA, gene_tot)
   
-  for (i in 0:(tot_gene - 1)) {
-    input <- count[ (i * tot_win + 1) : (i * tot_win + tot_win) ]
-    input <- data.frame(input) 
+  for (i in 0:(gene_tot - 1)) {
+    count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
+    count_in <- data.frame(count_in) 
+    win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
     
-    mod <- depmix(response = input ~ 1, data = input, nstates = 2, trstart = runif(4))
+    mod <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
     
     tryCatch(
       fm <- fit(mod, emc = em.control(rand = FALSE)),
       error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
     )
     
-    esttrans <- posterior(fm)$state
+    HMMstate <- posterior(fm)$state
     
-    if (esttrans %>% unique() %>% length() == 2) {
-      edge <- rep(NA, tot_win)
+    if (HMMstate %>% unique() %>% length() == 2) {
+      edge <- rep(NA, win_tot)
       
-      for (j in 1:length(esttrans)) {
+      for (j in 1:length(HMMstate)) {
         if (j > 4) {
-          sum_state <- sum(esttrans[ (j - 4) : j ])  
+          sum_state <- sum(HMMstate[ (j - 4) : j ])  
           if (sum_state == 5) {
-            edge[j] <- j
+            edge[j] <- win_in[j]
           }
         }
       }
@@ -158,17 +193,17 @@ find_edge <- function(input_file) {
       tail(1) 
     
     if (length(edge) == 1) {
-      edge <- edge * 500 + 500
+      #edge <- edge * 500 + 500
       res[i + 1] <- edge
     }
   }
   
   res <- data.frame(unique(name), res)
-  colnames(res) <- c('name', 'wave_edge')
+  colnames(res) <- c("name", "wave_edge")
   res
 }
 
-# Function to run find_edge() ----
+# Function to run find_edge()
 run_find_edge <- function(input_file) {
   
   df <- input_file %>% 
@@ -197,7 +232,7 @@ run_find_edge <- function(input_file) {
   res
 }
 
-# Function to extract gene symbols ----
+# Function to extract gene symbols
 extract_gene_symbol <- function(input_file) {
   
   get_last_name <- function(gene_string) {
@@ -364,38 +399,37 @@ server <- function(input, output) {
         
         
         # Normalized values and identified waves
-        df_norm <- DRB_norm(df_merge, win_max = win_max)
+        df_norm <- DRB_norm(df_merge, win_min = win_min, win_max = win_max)
         waves <- run_find_edge(df_norm)
         
         
         # Calculated elongation rates 
         tm <- input$time_2 - input$time_1
         
-        rates <- waves %>%
+        rateTable <- waves %>%
           na.omit() %>% 
           filter(tm_2 > tm_1) %>%
           mutate(
-            tm_1 = tm_1 / 1000,
-            tm_2 = tm_2 / 1000,
             rate = (tm_2 - tm_1) / tm,
             rate = round(rate, digits = 1)
           ) 
         
-        tm1_name <- str_c(input$time_1, "min")
-        tm2_name <- str_c(input$time_2, "min")
+        colnames(rateTable) <- c(
+          "Name", 
+          str_c(input$time_1, "min"),
+          str_c(input$time_2, "min"),
+          "Rate (kb/min)"
+        )
         
-        colnames(rates) <- c("Name", tm1_name, tm2_name, "Rate (kb/min)")
-        
-        list(rates, df_merge)
+        list(rateTable, df_merge)
       })
         
       
-      # Print table   
+      # Print table
       output$rateTable <- renderDataTable(
         datatable(
           tablesOut()[[1]],
           selection = list(mode = "single")
-          #caption = "Filtered Table (based on cyl)"
         )
       )
       
@@ -408,6 +442,7 @@ server <- function(input, output) {
         list(gene_name, wave_1, wave_2, rate)
       })
       
+      
       # Plot data for selected gene 
       plotOut <- eventReactive(input$plotSelected, ignoreInit = T, {
         
@@ -417,38 +452,81 @@ server <- function(input, output) {
           dplyr::select(name = 1) 
         
         # Input file 
-        df_merge <- as_data_frame(tablesOut()[[2]])
-        input_file <- df_merge %>% 
-          semi_join(gene_target, by = "name")
+        tm1_name <- str_c(input$time_1, " min")
+        tm2_name <- str_c(input$time_2, " min")
+        
+        input_file <- as_data_frame(tablesOut()[[2]]) %>%
+          semi_join(gene_target, by = "name") %>%
+          mutate(
+            key = ifelse(key == "tm_1", tm1_name, key),
+            key = ifelse(key == "tm_2", tm2_name, key),
+            key = ifelse(key == "tm_con", "Control", key),
+            key = fct_inorder(key),
+            win_id = (win_id - input$win_min) * ((end - start) / 1000)
+          ) %>%
+          rename(Timepoint = key)
+        
+        max_value <- input_file %>% 
+          group_by(name) %>% 
+          summarize(max_value = max(count))
+        
+        max_value <- max_value$max_value * 0.9
         
         # Wave coordinates 
-        wave_1 <- as.numeric(rateTable_selected()[[2]])
+        wave_1 <- as.numeric(rateTable_selected()[[2]]) 
         wave_2 <- as.numeric(rateTable_selected()[[3]])
-        rate   <- as.character(rateTable_selected()[[4]])
+        wave_1_label <- str_c(wave_1, " kb")
+        wave_2_label <- str_c(wave_2, " kb") 
+        rate <- as.character(rateTable_selected()[[4]])
         
         # Plot colors 
-        plot_colors <- get_color(c("orange_1", "blue_2", "red_2"))
+        plot_colors <- get_color(c("red_1", "blue_2", "green_2"))
         
         # Plotted data for selected gene 
         input_file %>%
-          ggplot(aes(win_id, count, color = key)) +
+          ggplot(aes(win_id, count, color = Timepoint)) +
           geom_line(size = 2) +
+          geom_vline(
+            xintercept = c(wave_1, wave_2), 
+            size = 1, linetype = 2,
+            color = plot_colors[1:2]
+          ) +
+          scale_color_manual(values = plot_colors) +
+          annotate("text", 
+            x = wave_1 + 4, 
+            y = max_value, 
+            label = wave_1_label,
+            size = 6,
+            color = plot_colors[1]
+          ) +
+          annotate("text", 
+            x = wave_2 + 4, 
+            y = max_value, 
+            label = wave_2_label, 
+            size = 6,
+            color = plot_colors[2]
+          ) +
           labs(
             title = gene_text,
             subtitle = str_c(rate, " kb/min"),
             x = "Distance from TSS (kb)",
-            y = "Signal"
+            y = ""
           ) +
           theme_classic() +
           theme(
+            strip.background = element_blank(),
             plot.title = element_text(size = 35, face = "bold"),
             plot.subtitle = element_text(size = 20),
             axis.title = element_text(size = 20, face = "bold"),
             axis.line = element_line(size = 2),
             axis.ticks = element_line(size = 2),
             axis.ticks.length = unit(10, units = "point"),
-            #axis.text = element_text(size = 15, face = "bold", color = "black")
-            axis.text = element_text(size = 15, color = "black")
+            axis.text = element_text(size = 15, color = "black"),
+            legend.title = element_text(size = 20, face = "bold"),
+            legend.text = element_text(size = 18),
+            legend.text.align = 0,
+            legend.background = element_blank(),
+            legend.position = c(0.8, 0.8)
           )
       })
       
