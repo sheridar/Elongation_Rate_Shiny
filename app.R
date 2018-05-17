@@ -2,6 +2,7 @@
 library(depmixS4)
 library(DT)
 library(shiny)
+library(shinythemes)
 library(tidyverse)
 library(magrittr)
 
@@ -263,7 +264,9 @@ extract_gene_symbol <- function(input_file) {
 
 
 # Define UI for data upload app ----
-ui <- fluidPage(
+ui <- fluidPage(theme = "custom.css",
+                
+  #shinythemes::themeSelector(),
   
   titlePanel("Elongation rate calculator"),
   
@@ -347,6 +350,8 @@ ui <- fluidPage(
     )
   ),
   
+  
+  
   fluidRow(plotOutput("genePlot"))
 )
 
@@ -387,26 +392,131 @@ server <- function(input, output) {
         
         df_list <- map(df_list, extract_gene_symbol) 
         
-        name_list <- list("tm_1", "tm_2", "tm_con")
+        name_list <- list("tm_con", "tm_1", "tm_2")
+        #name_list <- list("tm_1", "tm_2", "tm_con")
         names(df_list) <- name_list
         
         win_min <- input$win_min
         win_max <- input$win_max 
         
-        
-        # For testing win_min = 51, win_max = 195
         df_merge <- DRB_merge(df_list, win_min = win_min, win_max = win_max)
         
         
         # Normalized values and identified waves
         df_norm <- DRB_norm(df_merge, win_min = win_min, win_max = win_max)
-        waves <- run_find_edge(df_norm)
+        #wave_coords <- run_find_edge(df_norm)
+        
+        
+        
+        
+        
+        
+        withProgress(message = "Calculating rates", {
+        
+          win_tot <- df_norm %>% 
+            group_by(win_id) %>% 
+            group_size() %>% 
+            length()
+          
+          gene_tot <- df_norm %>% 
+            group_by(name) %>% 
+            group_size() %>% 
+            length()
+          
+          data_tot <- df_norm %>%
+            group_by(key) %>%
+            group_size() %>%
+            length()
+          
+          prog_tot <- data_tot * gene_tot
+          prog_n <- 1
+          
+          input_file <- df_norm %>% 
+            dplyr::select(-chrom, -start, -end) %>% 
+            spread(key, count) 
+          
+          name_cols <- input_file %>% dplyr::select(name, win_id) 
+          
+          wave_coords <- input_file %>% 
+            dplyr::select(name) %>% 
+            unique()
+          
+          col_names <- "name"
+          
+          for (i in 3:ncol(input_file)) {
+            input_data <- bind_cols(name_cols, input_file[, i])
+            data_name <- names(input_data)[3]
+            col_names <- c(col_names, data_name)
+            input_data %<>% gather(key, count, -name, -win_id)
+            
+            
+            #waves <- find_edge(input_data)
+            
+            
+            table_sort <- input_data %>% arrange(name, win_id)
+            name <- table_sort$name
+            win_id <- table_sort$win_id
+            count <- table_sort$count
+            waves <- rep(NA, gene_tot)
+            
+            for (j in 0:(gene_tot - 1)) {
+              count_in <- count[ (j * win_tot + 1) : (j * win_tot + win_tot) ]
+              count_in <- data.frame(count_in) 
+              win_in <- win_id[ (j * win_tot + 1) : (j * win_tot + win_tot) ] 
+              
+              HMMmodel <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
+              
+              tryCatch(
+                fm <- fit(HMMmodel, emc = em.control(rand = FALSE)),
+                error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
+              )
+              
+              HMMstate <- posterior(fm)$state
+              
+              if (HMMstate %>% unique() %>% length() == 2) {
+                edge <- rep(NA, win_tot)
+                
+                for (n in 1:length(HMMstate)) {
+                  if (n > 4) {
+                    sum_state <- sum(HMMstate[ (n - 4) : n ])  
+                    if (sum_state == 5) {
+                      edge[n] <- win_in[n]
+                    }
+                  }
+                }
+              }
+              
+              edge %<>%
+                na.omit() %>%
+                tail(1) 
+              
+              if (length(edge) == 1) {
+                #edge <- edge * 500 + 500
+                waves[j + 1] <- edge
+              }
+              
+              incProgress(1/prog_tot)
+            }
+            
+            waves <- data.frame(unique(name), waves)
+            colnames(waves) <- c("name", "wave_edge")
+            
+            wave_coords %<>% left_join(waves, by = "name") 
+            colnames(wave_coords) <- col_names
+          }
+        })
+        
+        
+        
+        
+        
+        
         
         
         # Calculated elongation rates 
         tm <- input$time_2 - input$time_1
         
-        rateTable <- waves %>%
+        rateTable <- wave_coords %>%
           na.omit() %>% 
           filter(tm_2 > tm_1) %>%
           mutate(
@@ -558,4 +668,7 @@ server <- function(input, output) {
 
 # Create Shiny app ----
 shinyApp(ui, server)
+
+
+
 
