@@ -80,7 +80,11 @@ DRB_merge <- function(input, win_min = 1, win_max = 200) {
         win_id >= win_min,
         win_id <= win_max
       ) %>%
-      filter(sum(count) > 0) %>%
+      filter(
+        min(win_id) == win_min,
+        max(win_id) == win_max,
+        sum(count) > 0
+      ) %>% 
       ungroup()
   })
   
@@ -390,10 +394,9 @@ server <- function(input, output) {
           })
         }
         
-        df_list <- map(df_list, extract_gene_symbol) 
+        #df_list <- map(df_list, extract_gene_symbol) 
         
-        name_list <- list("tm_con", "tm_1", "tm_2")
-        #name_list <- list("tm_1", "tm_2", "tm_con")
+        name_list <- list("tm_1", "tm_2", "tm_con")
         names(df_list) <- name_list
         
         win_min <- input$win_min
@@ -464,10 +467,11 @@ server <- function(input, output) {
               count_in <- data.frame(count_in) 
               win_in <- win_id[ (j * win_tot + 1) : (j * win_tot + win_tot) ] 
               
-              HMMmodel <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
-              
               tryCatch(
-                fm <- fit(HMMmodel, emc = em.control(rand = FALSE)),
+                {
+                  HMMmodel <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
+                  fm <- fit(HMMmodel, emc = em.control(rand = FALSE))
+                },
                 error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
               )
               
