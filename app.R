@@ -35,6 +35,11 @@ get_color <- function(targets) {
   as.character(color_list[targets])
 }
 
+# Plot colors 
+plot_colors <- get_color(c("green_2", "red_4", "blue_2"))
+
+
+
 # Define UI for data upload app ----
 ui <- fluidPage(
   
@@ -136,7 +141,7 @@ ui <- fluidPage(
     )
   ),
   
-  fluidRow(plotOutput(width = 925, "genePlot"))
+  fluidRow(plotOutput(width = 925, "metaPlot"))
 )
 
 
@@ -153,26 +158,30 @@ server <- function(input, output) {
       
       tablesOut <- eventReactive(input$runAnalysis, ignoreInit = T, {
           
-        req(input$file_1)
-        req(input$file_2)
-        req(input$time_1)
-        req(input$time_2)
-        
-        
         ################
         # Input values #
         ################
         
-        file_con   <- input$control$datapath
-        file_1     <- input$file_1$datapath
-        file_2     <- input$file_2$datapath
-        genes_path <- input$gene_list$datapath
+        file_1     <- input$file_1
+        file_2     <- input$file_2
+        con_path   <- input$control$datapath
+        file1_path <- input$file_1$datapath
+        file2_path <- input$file_2$datapath
         genes      <- input$gene_list
+        genes_path <- input$gene_list$datapath
         
         time_1  <- input$time_1
         time_2  <- input$time_2
+        tm1_name <- str_c(time_1, " min")
+        tm2_name <- str_c(time_2, " min")
+        
         win_min <- input$win_min
-        win_max <- input$win_max 
+        win_max <- input$win_max
+        
+        req(file_1)
+        req(file_2)
+        req(time_1)
+        req(time_2)
         
         
         ##################
@@ -186,7 +195,7 @@ server <- function(input, output) {
           "count"
         )
     
-        file_list <- list(file_con, file_1, file_2)
+        file_list <- list(con_path, file1_path, file2_path)
         df_list <- map(file_list, function(x) read_tsv(x, col_names))
         
         if (!is.null(genes)) {
@@ -515,9 +524,8 @@ server <- function(input, output) {
           rate_table <- extract_gene_symbol(rate_table)
           
           colnames(rate_table) <- c(
-            "Name", "Long name", 
-            str_c(input$time_1, "min"),
-            str_c(input$time_2, "min"),
+            "Name", "Long_name", 
+            tm1_name, tm2_name,
             "Rate (kb/min)"
           )
           
@@ -536,7 +544,8 @@ server <- function(input, output) {
           options = list(
             columnDefs = list(list(visible = F, targets = c(2)))
           ),
-          selection = list(mode = "single")
+          
+          selection = list(mode = "multiple")
         )
       )
       
@@ -552,113 +561,251 @@ server <- function(input, output) {
       )
       
       
-      ##################################
-      # Creates plot for selected gene #
-      ##################################
+      #####################
+      # Creates metaplots #
+      #####################
       
-      rateTable_selected <- reactive({
-        ids <- input$rateTable_rows_selected
-        gene_name <- tablesOut()[[1]][ids, 1]
-        long_name <- tablesOut()[[1]][ids, 2]
-        wave_1    <- tablesOut()[[1]][ids, 3]
-        wave_2    <- tablesOut()[[1]][ids, 4]
-        rate      <- tablesOut()[[1]][ids, 5]
-        list(gene_name, long_name, wave_1, wave_2, rate)
-      })
-      
-      # Plot data for selected gene 
       plotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
-        # Gene target
-        gene_text <- as.character(rateTable_selected()[[1]])
-        gene_target <- as_data_frame(rateTable_selected()[[2]]) %>% 
-          dplyr::select(name = 1) 
+        # Function to create metaplots 
+        DRB_metaplot <- function(
+          input_file, 
+          plot_title = NULL, 
+          sub_title = NULL, 
+          y_title = NULL,
+          wave_1, wave_2, rate, 
+          text_pos, 
+          plot_colors = c("#41ab5d", "#cb181d", "#225ea8")
+          ) {
         
-        # Input file 
-        tm1_name <- str_c(input$time_1, " min")
-        tm2_name <- str_c(input$time_2, " min")
+          wave_1_lab <- str_c(wave_1, " kb")
+          wave_2_lab <- str_c(wave_2, " kb")
+          
+          meta_plot <- input_file %>%
+            ggplot(aes(win_id, count, color = Timepoint)) +
+            geom_line(size = 2) +
+            geom_vline(
+              xintercept = c(wave_1, wave_2), 
+              size = 1, linetype = 2,
+              color = plot_colors[2:3]
+            ) +
+            labs(
+              subtitle = sub_title,
+              x = "Distance from TSS (kb)",
+              y = y_title
+            ) +
+            scale_color_manual(values = plot_colors) +
+            annotate("text", 
+              x = wave_1 + 4, 
+              y = text_pos, 
+              label = wave_1_lab,
+              size = 6,
+              color = plot_colors[2]
+            ) +
+            annotate("text", 
+              x = wave_2 + 4, 
+              y = text_pos, 
+              label = wave_2_lab, 
+              size = 6,
+              color = plot_colors[3]
+            ) +
+            theme_classic() +
+            theme(
+              strip.background = element_blank(),
+              plot.title = element_text(size = 35, face = "bold"),
+              plot.subtitle = element_text(size = 20),
+              axis.title = element_text(size = 20, face = "bold"),
+              axis.line = element_line(size = 2),
+              axis.ticks = element_line(size = 2),
+              axis.ticks.length = unit(10, units = "point"),
+              axis.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 20, face = "bold"),
+              legend.text = element_text(size = 18),
+              legend.text.align = 0,
+              legend.background = element_blank(),
+              legend.position = c(0.8, 0.8)
+            )
+          
+          if (!is.null(plot_title[[1]])) {
+            meta_plot <- meta_plot + labs(title = plot_title)
+          }
+          
+          meta_plot
+        }
         
-        df_merge <- as_data_frame(tablesOut()[[2]])
+        # Function to calculate mean signal 
+        DRB_mean <- function(input_file, strand = F, relFreq = F) {
+          
+          if (strand == T) {
+            res <- input_file %>%
+              separate(key, sep = "_", into = c("key", "rep", "strand", "type")) %>%
+              unite(key, key, rep, type, sep = "_")
+          } 
+          
+          else res <- input_file
+          
+          if (relFreq == T) {
+            res <- res %>%
+              group_by(key, name) %>%
+              mutate(count = count / sum(count)) %>%
+              ungroup()
+          }
+          
+          if (strand == T) {
+            res <- res %>% 
+              separate(key, sep = "_", into = c("key", "rep", "type")) %>%
+              unite(key, key, rep, strand, type, sep = "_")
+          }
+          
+          res <- res %>%
+            group_by(key, win_id) %>%
+            summarize(count = mean(count)) %>%
+            ungroup()
+          
+          res
+        }
         
-        input_file <- df_merge %>% 
-          semi_join(gene_target, by = "name") %>% 
-          mutate(
-            key = ifelse(key == "tm_1", tm1_name, key),
-            key = ifelse(key == "tm_2", tm2_name, key),
-            key = ifelse(key == "tm_con", "Control", key),
-            key = fct_inorder(key),
-            win_id = (win_id - win_min) * ((end - start) / 1000)
-          ) %>%
-          rename(Timepoint = key)
         
-        max_value <- input_file %>% 
-          group_by(name) %>% 
-          summarize(max_value = max(count))
         
-        max_value <- max_value$max_value * 0.9
+        # Input values 
+        time_1  <- input$time_1
+        time_2  <- input$time_2
+        tm1_name <- str_c(time_1, " min")
+        tm2_name <- str_c(time_2, " min")
         
-        # Wave coordinates 
-        wave_1 <- as.numeric(rateTable_selected()[[3]]) 
-        wave_2 <- as.numeric(rateTable_selected()[[4]])
-        wave_1_label <- str_c(wave_1, " kb")
-        wave_2_label <- str_c(wave_2, " kb") 
-        rate <- as.character(rateTable_selected()[[5]])
+        win_min <- input$win_min
         
-        # Plot colors 
-        plot_colors <- get_color(c("green_2", "red_4", "blue_2"))
+        df_merge <- as_data_frame(tablesOut()[[2]])  
         
-        # Plot data for selected gene 
-        input_file %>%
-          ggplot(aes(win_id, count, color = Timepoint)) +
-          geom_line(size = 2) +
-          geom_vline(
-            xintercept = c(wave_1, wave_2), 
-            size = 1, linetype = 2,
-            color = plot_colors[2:3]
-          ) +
-          scale_color_manual(values = plot_colors) +
-          labs(
-            title = gene_text,
-            subtitle = str_c(rate, " kb/min"),
-            x = "Distance from TSS (kb)",
-            y = ""
-          ) +
-          annotate("text", 
-            x = wave_1 + 4, 
-            y = max_value, 
-            label = wave_1_label,
-            size = 6,
-            color = plot_colors[2]
-          ) +
-          annotate("text", 
-            x = wave_2 + 4, 
-            y = max_value, 
-            label = wave_2_label, 
-            size = 6,
-            color = plot_colors[3]
-          ) +
-          theme_classic() +
-          theme(
-            strip.background = element_blank(),
-            plot.title = element_text(size = 35, face = "bold"),
-            plot.subtitle = element_text(size = 20),
-            axis.title = element_text(size = 20, face = "bold"),
-            axis.line = element_line(size = 2),
-            axis.ticks = element_line(size = 2),
-            axis.ticks.length = unit(10, units = "point"),
-            axis.text = element_text(size = 15, color = "black"),
-            legend.title = element_text(size = 20, face = "bold"),
-            legend.text = element_text(size = 18),
-            legend.text.align = 0,
-            legend.background = element_blank(),
-            legend.position = c(0.8, 0.8)
+        win_len <- df_merge %>% 
+          mutate(len = (end - start) / 1000) %>% 
+          group_by(len) %>% 
+          summarize(n())
+        
+        win_len <- win_len$len 
+        
+        # Create metaplot for selected gene
+        if (!is.null(input$rateTable_rows_selected)) {
+          
+          # Reactive to retrieve info for selected gene
+          rateTable_selected <- reactive({
+            ids <- input$rateTable_rows_selected
+            gene_name <- tablesOut()[[1]][ids, 1]
+            long_name <- tablesOut()[[1]][ids, 2]
+            wave_1    <- tablesOut()[[1]][ids, 3]
+            wave_2    <- tablesOut()[[1]][ids, 4]
+            rate      <- tablesOut()[[1]][ids, 5]
+            list(gene_name, long_name, wave_1, wave_2, rate)
+          })
+          
+          # Gene targets
+          gene_text <- as.character(rateTable_selected()[[1]])
+          gene_targets <- as_data_frame(rateTable_selected()[[2]]) %>% 
+            dplyr::select(name = 1) 
+          
+          # Wave coordinates 
+          wave_1 <- round( mean( as.numeric( rateTable_selected()[[3]] )), digits = 1)
+          wave_2 <- round( mean( as.numeric( rateTable_selected()[[4]] )), digits = 1)
+          rate   <- round( mean( as.numeric( rateTable_selected()[[5]])), digits = 1)
+          
+          # Input file 
+          df_merge %<>% semi_join(gene_targets, by = "name")
+          
+          df_mean <- DRB_mean(df_merge)
+          
+          input_file <- df_mean %>% 
+            mutate(
+              key = ifelse(key == "tm_1", tm1_name, key),
+              key = ifelse(key == "tm_2", tm2_name, key),
+              key = ifelse(key == "tm_con", "Control", key),
+              key = fct_inorder(key),
+              win_id = (win_id - win_min) * win_len
+            ) %>%
+            rename(Timepoint = key)
+          
+          # y-coord for plot annotation
+          text_pos <- input_file %>% 
+            mutate(max_value = max(count) * 0.9) %>%
+            dplyr::select(max_value) %>% 
+            unique()
+          text_pos <- as.numeric(text_pos)
+          
+          # Created metaplots 
+          if (length(gene_text) == 1) {
+            DRB_metaplot(
+              input_file, 
+              plot_title = gene_text,
+              sub_title = str_c(rate, " kb/min"),
+              y_title = "",
+              wave_1 = wave_1, 
+              wave_2 = wave_2, 
+              rate = rate, 
+              text_pos = text_pos
+            )
+          
+          } else {
+            DRB_metaplot(
+              input_file, 
+              plot_title = "",
+              sub_title = str_c("Average rate: ", rate, " kb/min"),
+              y_title = "Average Signal",
+              wave_1 = wave_1, 
+              wave_2 = wave_2, 
+              rate = rate, 
+              text_pos = text_pos
+            )
+          }
+            
+        } else {
+          
+          gene_name <- tablesOut()[[1]][, 1]
+          long_name <- tablesOut()[[1]][, 2]
+          wave_1    <- tablesOut()[[1]][, 3]
+          wave_2    <- tablesOut()[[1]][, 4]
+          rate      <- tablesOut()[[1]][, 5]
+          
+          # Wave coordinates 
+          wave_1 <- round( mean( as.numeric( wave_1 )), digits = 1)
+          wave_2 <- round( mean( as.numeric( wave_2 )), digits = 1)
+          rate   <- round( mean( as.numeric( rate )), digits = 1)
+          
+          # Input file 
+          df_mean <- DRB_mean(df_merge, strand = F, relFreq = F)
+          
+          input_file <- df_mean %>% 
+            mutate(
+              key = ifelse(key == "tm_1", tm1_name, key),
+              key = ifelse(key == "tm_2", tm2_name, key),
+              key = ifelse(key == "tm_con", "Control", key),
+              key = fct_inorder(key),
+              win_id = (win_id - win_min) * win_len
+            ) %>%
+            rename(Timepoint = key)
+          
+          # y-coord for plot annotation
+          text_pos <- input_file %>% 
+            mutate(max_value = max(count) * 0.9) %>%
+            dplyr::select(max_value) %>% 
+            unique()
+          text_pos <- as.numeric(text_pos)
+          
+          # Created metaplots
+          DRB_metaplot(
+            input_file, 
+            plot_title = "",
+            sub_title = str_c("Average rate: ", rate, " kb/min"),
+            y_title = "Average Signal",
+            wave_1 = wave_1, 
+            wave_2 = wave_2, 
+            rate = rate, 
+            text_pos = text_pos
           )
+        }
       })
       
+      
       # Output plot 
-      output$genePlot <- renderPlot(
-          plotOut()
-      )
+      output$metaPlot <- renderPlot(plotOut())
     },
   
     # Return a safeError if a parsing error occurs
