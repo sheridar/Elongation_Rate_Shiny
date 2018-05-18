@@ -35,253 +35,6 @@ get_color <- function(targets) {
   as.character(color_list[targets])
 }
 
-# Functions ----
-
-# Function to add "key" columns to list of dfs
-add_key <- function(input) {
-  
-  tbl_list <- list()
-  
-  for (i in 1:length(input)) {
-    x <- input[i] 
-    y <- data.frame(x)
-    
-    new_names <- str_replace(colnames(y), str_c(names(x), "."), "")
-    colnames(y) <- str_replace(new_names, "count", names(x))
-    
-    tbl_list <- c(tbl_list, list(y))
-  }
-  
-  tbl_list
-}
-
-# Function to merge tables
-tbl_merge <- function(input, merge_by = "name") {
-  
-  tbl_list <- add_key(input) 
-  
-  # Merged tables 
-  res <- purrr::reduce(tbl_list, function(x, y) {
-    left_join(x, y, by = merge_by)
-  }) %>% 
-    na.omit()
-  
-  res
-}
-
-# Function to merge tables
-DRB_merge <- function(input, win_min = 1, win_max = 200) {
-  
-  # Selected columns and filtered 
-  res <- map(input, function(x) {
-    x %>% 
-      dplyr::select(chrom, start, end, name, win_id, count) %>%
-      group_by(name) %>%
-      filter(
-        win_id >= win_min,
-        win_id <= win_max
-      ) %>%
-      filter(
-        min(win_id) == win_min,
-        max(win_id) == win_max,
-        sum(count) > 0
-      ) %>% 
-      ungroup()
-  })
-  
-  # Merged tables 
-  res <- tbl_merge(res, merge_by = c("chrom", "start", "end", "name", "win_id")) %>%
-    gather(key, count, -chrom, -start, -end, -name, -win_id)
-  
-  res
-}
-
-# Function to normalize signal
-DRB_norm <- function(input_file, win_min = 1, win_max = 200) {
-  
-  win_cutoff <- win_max - 5
-  
-  res <- input_file %>% 
-    # Added pseudo count 
-    group_by(key, name) %>% 
-    mutate(zero = ifelse(count == 0, T, F)) %>% 
-    group_by(key, name, zero) %>% 
-    mutate(min_count = min(count)) %>%
-    group_by(key, name) %>% 
-    mutate(count = ifelse(count == 0, max(min_count) / 2, count)) %>% 
-    ungroup() %>% 
-    dplyr::select(-zero, -min_count) %>% 
-    
-    # Normalized by -DRB signal 
-    separate(key, sep = "_", into = c("treatment", "tm")) %>% 
-    spread(tm, count) %>%
-    gather(tm, count, -chrom, -start, -end, -name, -win_id, -treatment, -con) %>% 
-    mutate(count = count / con) %>%
-    dplyr::select(-con) %>% 
-    
-    # Normalized ratios by the average ratio for the last 5 bins 
-    unite(key, treatment, tm, sep = "_") %>% 
-    mutate(win_type = ifelse(win_id > win_cutoff, "con_wins", "data_wins")) %>% 
-    group_by(key, name, win_type) %>% 
-    mutate(ave_signal = mean(count)) %>% 
-    ungroup() %>% 
-    spread(win_type, ave_signal) %>% 
-    mutate(con_wins = ifelse(is.na(con_wins), 0, con_wins)) %>% 
-    group_by(name, key) %>% 
-    mutate(con_wins = max(con_wins)) %>% 
-    ungroup() %>% 
-    mutate(count = count / con_wins) %>% 
-    dplyr::select(-data_wins, -con_wins) %>% 
-    
-    # Digitized ratios to a range of 0 - 2.0 and step size of 0.5
-    group_by(name, key) %>%
-    mutate(max_count = max(count)) %>% 
-    ungroup() %>% 
-    mutate(
-      count = (count / max_count) * 2,
-      count = floor(count / 0.05) / 20
-    ) %>%
-    dplyr::select(-max_count) %>%
-    
-    # Converted win_id to distance (kb)
-    mutate(win_id = (win_id - win_min) * ((end - start) / 1000))
-    
-  res
-}
-
-# Function to run depmix
-find_edge <- function(input_file, win_tot, gene_tot, prog_tot) {
-  
-  table_sort <- input_file %>% arrange(name, win_id)
-  name <- table_sort$name
-  win_id <- table_sort$win_id
-  count <- table_sort$count
-  res <- rep(NA, gene_tot)
-  
-  for (i in 0:(gene_tot - 1)) {
-    count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
-    count_in <- data.frame(count_in) 
-    win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
-    
-    mod <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
-    
-    tryCatch(
-      fm <- fit(mod, emc = em.control(rand = FALSE)),
-      error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
-    )
-    
-    HMMstate <- posterior(fm)$state
-    
-    if (HMMstate %>% unique() %>% length() == 2) {
-      edge <- rep(NA, win_tot)
-      
-      for (j in 1:length(HMMstate)) {
-        if (j > 4) {
-          sum_state <- sum(HMMstate[ (j - 4) : j ])  
-          if (sum_state == 5) {
-            edge[j] <- win_in[j]
-          }
-        }
-      }
-    }
-    
-    edge %<>%
-      na.omit() %>%
-      tail(1) 
-    
-    if (length(edge) == 1) {
-      res[i + 1] <- edge
-    }
-    
-    incProgress(1/prog_tot)
-  }
-  
-  res <- data.frame(unique(name), res)
-  colnames(res) <- c("name", "wave_edge")
-  res
-}
-
-# Function to run find_edge()
-run_find_edge <- function(input_file) {
-  
-  withProgress(message = "Calculating rates", {
-    
-    win_tot <- input_file %>% 
-      group_by(win_id) %>% 
-      group_size() %>% 
-      length()
-    
-    gene_tot <- input_file %>% 
-      group_by(name) %>% 
-      group_size() %>% 
-      length()
-    
-    data_tot <- input_file %>%
-      group_by(key) %>%
-      group_size() %>%
-      length()
-    
-    prog_tot <- data_tot * gene_tot
-    
-    df <- input_file %>% 
-      dplyr::select(-chrom, -start, -end) %>% 
-      spread(key, count) 
-    
-    name_cols <- df %>% dplyr::select(name, win_id) 
-    
-    res <- df %>% 
-      dplyr::select(name) %>% 
-      unique()
-    
-    col_names <- "name"
-    
-    for (i in 3:ncol(df)) {
-      input_data <- bind_cols(name_cols, df[, i])
-      data_name <- names(input_data)[3]
-      col_names <- c(col_names, data_name)
-      input_data %<>% gather(key, count, -name, -win_id)
-      
-      waves <- find_edge(input_data, win_tot, gene_tot, prog_tot)
-      
-      res %<>% left_join(waves, by = "name") 
-      colnames(res) <- col_names
-    }
-    
-    res
-  })    
-}
-
-# Function to get gene symbol from string
-get_last_name <- function(gene_string) {
-    res <- str_split(gene_string, "\\|")
-    
-    str_len <- length(res[[1]])
-    
-    res <- res[[1]][[str_len]]
-    
-    res
-  }
-
-# Function to get gene symbols from dataframe
-extract_gene_symbol <- function(input_file) {
-  
-  gene_names <- input_file %>%
-    dplyr::select(name)
-  
-  other_data <- input_file %>%
-    dplyr::select(-name)
-  
-  gene_matrix <- as.matrix(gene_names)
-  
-  new_names <- map(gene_matrix, get_last_name)
-  
-  new_names <- data.frame(name = as.matrix(new_names)) %>%
-    mutate(name = as.character(name))
-  
-  res <- bind_cols(new_names, other_data)
-}
-
-
 # Define UI for data upload app ----
 ui <- fluidPage(
   
@@ -370,7 +123,7 @@ ui <- fluidPage(
       div(
         column(2, actionButton("runAnalysis", "RUN")),
         column(2, downloadButton("download", "Export")),
-        column(2, offset = 1, actionButton("plotSelected", "Plot")),
+        column(2, offset = 1, actionButton("createPlot", "Plot")),
         style = "height: 75px; background-color: white;"
       )
     )
@@ -394,6 +147,10 @@ server <- function(input, output) {
   
   tryCatch(
     {
+      #####################################
+      # Creates table of elongation rates #
+      #####################################
+      
       tablesOut <- eventReactive(input$runAnalysis, ignoreInit = T, {
           
         req(input$file_1)
@@ -401,7 +158,27 @@ server <- function(input, output) {
         req(input$time_1)
         req(input$time_2)
         
-        # Merged data tables 
+        
+        ################
+        # Input values #
+        ################
+        
+        file_con   <- input$control$datapath
+        file_1     <- input$file_1$datapath
+        file_2     <- input$file_2$datapath
+        genes_path <- input$gene_list$datapath
+        genes      <- input$gene_list
+        
+        time_1  <- input$time_1
+        time_2  <- input$time_2
+        win_min <- input$win_min
+        win_max <- input$win_max 
+        
+        
+        ##################
+        # Imported files #
+        ##################
+        
         col_names <- c(
           "chrom", "start",
           "end", "name",
@@ -409,58 +186,351 @@ server <- function(input, output) {
           "count"
         )
     
-        file_list <- list(input$file_1$datapath, input$file_2$datapath, input$control$datapath)
+        file_list <- list(file_con, file_1, file_2)
         df_list <- map(file_list, function(x) read_tsv(x, col_names))
         
-        if (!is.null(input$gene_list)) {
-          gene_list <- read_tsv(input$gene_list$datapath, "name")
+        if (!is.null(genes)) {
+          gene_list <- read_tsv(genes_path, "name")
           
           df_list <- map(df_list, function(x){
             x %>% semi_join(gene_list, by = "name") 
           })
         }
         
-        name_list <- list("tm_1", "tm_2", "tm_con")
+        name_list <- list("tm_con", "tm_1", "tm_2")
         names(df_list) <- name_list
         
-        win_min <- input$win_min
-        win_max <- input$win_max 
+        
+        #################
+        # Merged tables #
+        #################
+        
+        # Function to merge tables
+        DRB_merge <- function(input, win_min = 1, win_max = 200) {
+          
+          # Function to add "key" columns to list of dfs
+          add_key <- function(input) {
+            
+            tbl_list <- list()
+            
+            for (i in 1:length(input)) {
+              x <- input[i] 
+              y <- data.frame(x)
+              
+              new_names <- str_replace(colnames(y), str_c(names(x), "."), "")
+              colnames(y) <- str_replace(new_names, "count", names(x))
+              
+              tbl_list <- c(tbl_list, list(y))
+            }
+            
+            tbl_list
+          }
+          
+          # Function to merge tables
+          tbl_merge <- function(input, merge_by = "name") {
+            
+            tbl_list <- add_key(input) 
+            
+            # Merged tables 
+            res <- purrr::reduce(tbl_list, function(x, y) {
+              left_join(x, y, by = merge_by)
+            }) %>% 
+              na.omit()
+            
+            res
+          }
+          
+          # Selected columns and filtered 
+          res <- map(input, function(x) {
+            x %>% 
+              dplyr::select(chrom, start, end, name, win_id, count) %>%
+              group_by(name) %>%
+              filter(
+                win_id >= win_min,
+                win_id <= win_max
+              ) %>%
+              filter(
+                min(win_id) == win_min,
+                max(win_id) == win_max,
+                sum(count) > 0
+              ) %>% 
+              ungroup()
+          })
+          
+          # Merged tables 
+          res <- tbl_merge(res, merge_by = c("chrom", "start", "end", "name", "win_id")) %>%
+            gather(key, count, -chrom, -start, -end, -name, -win_id)
+          
+          res
+        }
         
         df_merge <- DRB_merge(df_list, win_min = win_min, win_max = win_max)
         
+        win_len <- df_merge %>% 
+          mutate(len = (end - start) / 1000) %>% 
+          group_by(len) %>% 
+          summarize(n())
         
-        # Normalized values and identified waves
+        win_len <- win_len$len 
+        
+        #if (nrow(win_len) != 1) {
+        #  stop("Windows are not the same length")
+        #}
+        
+        
+        #####################
+        # Normalized tables #
+        #####################
+        
+        # Function to normalize signal
+        DRB_norm <- function(input_file, win_min = 1, win_max = 200) {
+          
+          win_cutoff <- win_max - 5
+          
+          res <- input_file %>% 
+            # Added pseudo count 
+            group_by(key, name) %>% 
+            mutate(zero = ifelse(count == 0, T, F)) %>% 
+            group_by(key, name, zero) %>% 
+            mutate(min_count = min(count)) %>%
+            group_by(key, name) %>% 
+            mutate(count = ifelse(count == 0, max(min_count) / 2, count)) %>% 
+            ungroup() %>% 
+            dplyr::select(-zero, -min_count) %>% 
+            
+            # Normalized by -DRB signal 
+            separate(key, sep = "_", into = c("treatment", "tm")) %>% 
+            spread(tm, count) %>%
+            gather(tm, count, -chrom, -start, -end, -name, -win_id, -treatment, -con) %>% 
+            mutate(count = count / con) %>%
+            dplyr::select(-con) %>% 
+            
+            # Normalized ratios by the average ratio for the last 5 bins 
+            unite(key, treatment, tm, sep = "_") %>% 
+            mutate(win_type = ifelse(win_id > win_cutoff, "con_wins", "data_wins")) %>% 
+            group_by(key, name, win_type) %>% 
+            mutate(ave_signal = mean(count)) %>% 
+            ungroup() %>% 
+            spread(win_type, ave_signal) %>% 
+            mutate(con_wins = ifelse(is.na(con_wins), 0, con_wins)) %>% 
+            group_by(name, key) %>% 
+            mutate(con_wins = max(con_wins)) %>% 
+            ungroup() %>% 
+            mutate(count = count / con_wins) %>% 
+            dplyr::select(-data_wins, -con_wins) %>% 
+            
+            # Digitized ratios to a range of 0 - 2.0 and step size of 0.5
+            group_by(name, key) %>%
+            mutate(max_count = max(count)) %>% 
+            ungroup() %>% 
+            mutate(
+              count = (count / max_count) * 2,
+              count = floor(count / 0.05) / 20
+            ) %>%
+            dplyr::select(-max_count) %>%
+            
+            # Converted win_id to distance (kb)
+            mutate(win_id = (win_id - win_min) * ((end - start) / 1000))
+          
+          res
+        }
+        
         df_norm <- DRB_norm(df_merge, win_min = win_min, win_max = win_max)
-        wave_coords <- run_find_edge(df_norm)
         
         
-        # Calculated elongation rates 
-        tm <- input$time_2 - input$time_1
+        ###############################
+        # Identified wave coordinates #
+        ###############################
         
-        rateTable <- wave_coords %>%
-          na.omit() %>% 
-          filter(tm_2 > tm_1) %>%
-          mutate(
-            rate = (tm_2 - tm_1) / tm,
-            rate = round(rate, digits = 1),
-            long_name = name
-          ) %>%
-          dplyr::select(long_name, name, tm_1, tm_2, rate)
+        # Function to identify wave coordinates 
+        find_waves <- function(input_file) {
+          
+          # Function to retrieve group size
+          get_group_size <- function(input_file, col_name) {
+            
+            if (col_name == "name") {
+              res <- input_file %>% group_by(name)
+              
+            } else if (col_name == "key") {
+              res <- input_file %>% group_by(key)
+              
+            } else if (col_name == "win_id") {
+              res <- input_file %>% group_by(win_id)
+            }
+            
+            res %<>%
+              group_size() %>%
+              length()
+            
+            res
+          }
+          
+          # Function to run depmix
+          run_depmix <- function(input_file, win_tot, gene_tot, prog_tot) {
+            
+            table_sort <- input_file %>% 
+              arrange(name, win_id)
+            name <- table_sort$name
+            win_id <- table_sort$win_id
+            count <- table_sort$count
+            res <- rep(NA, gene_tot)
+            
+            for (i in 0:(gene_tot - 1)) {
+              count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
+              count_in <- data.frame(count_in) 
+              win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
+              
+              HMMmod <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
+              
+              tryCatch(
+                HMMfit <- fit(HMMmod, emc = em.control(rand = FALSE)),
+                error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
+              )
+              
+              HMMstate <- posterior(HMMfit)$state
+              
+              if (HMMstate %>% unique() %>% length() == 2) {
+                edge <- rep(NA, win_tot)
+                
+                for (j in 1:length(HMMstate)) {
+                  if (j > 4) {
+                    sum_state <- sum(HMMstate[ (j - 4) : j ])  
+                    if (sum_state == 5) {
+                      edge[j] <- win_in[j]
+                    }
+                  }
+                }
+              }
+              
+              edge %<>%
+                na.omit() %>%
+                tail(1) 
+              
+              if (length(edge) == 1) {
+                res[i + 1] <- edge
+              }
+              
+              incProgress(1/prog_tot)
+            }
+            
+            res <- data.frame(unique(name), res)
+            colnames(res) <- c("name", "wave_edge")
+            
+            res
+          }
+          
+          withProgress(message = "Calculating rates", {
+            
+            win_tot <- get_group_size(input_file, "win_id")
+            gene_tot <- get_group_size(input_file, "name")  
+            data_tot <- get_group_size(input_file, "key")
+            prog_tot <- data_tot * gene_tot
+            
+            shortened_df <- input_file %>% 
+              dplyr::select(-chrom, -start, -end) %>% 
+              spread(key, count) 
+            
+            name_cols <- shortened_df %>% dplyr::select(name, win_id) 
+            
+            res <- shortened_df %>% 
+              dplyr::select(name) %>% 
+              unique()
+            
+            col_names <- "name"
+            
+            for (i in 3:ncol(shortened_df)) {
+              input_data <- bind_cols(name_cols, shortened_df[, i])
+              data_name <- names(input_data)[3]
+              col_names <- c(col_names, data_name)
+              input_data %<>% gather(key, count, -name, -win_id)
+              
+              waves <- run_depmix(input_data, win_tot, gene_tot, prog_tot)
+              
+              res %<>% left_join(waves, by = "name") 
+              colnames(res) <- col_names
+            }
+            
+            res
+          })    
+        }
         
-        rateTable <- extract_gene_symbol(rateTable)
+        wave_coords <- find_waves(df_norm)
         
-        colnames(rateTable) <- c(
-          "Name", "Long name", 
-          str_c(input$time_1, "min"),
-          str_c(input$time_2, "min"),
-          "Rate (kb/min)"
-        )
         
-        list(rateTable, df_merge)
+        ###############################
+        # Calculated elongation rates #
+        ###############################
+        
+        # Function to calculate elongation rates 
+        calc_rates <- function(input_file) {
+          
+          # Function to extract gene symbols from dataframe
+          extract_gene_symbol <- function(input_file) {
+            
+            # Function to extract gene symbol from string
+            get_last_name <- function(gene_string) {
+              res <- str_split(gene_string, "\\|")
+              
+              str_len <- length(res[[1]])
+              
+              res <- res[[1]][[str_len]]
+              
+              res
+            }
+            
+            gene_names <- input_file %>%
+              dplyr::select(name)
+            
+            other_data <- input_file %>%
+              dplyr::select(-name)
+            
+            gene_matrix <- as.matrix(gene_names)
+            
+            new_names <- map(gene_matrix, get_last_name)
+            
+            new_names <- data.frame(name = as.matrix(new_names)) %>%
+              mutate(name = as.character(name))
+            
+            res <- bind_cols(new_names, other_data)
+          }
+          
+          wave_max <- (win_max - win_min) * win_len - 5
+          
+          tm <- time_2 - time_1
+          
+          rate_table <- input_file %>%
+            na.omit() %>% 
+            filter(
+              tm_2 > tm_1,
+              tm_1 <= wave_max,
+              tm_2 <= wave_max
+            ) %>%
+            mutate(
+              rate = (tm_2 - tm_1) / tm,
+              rate = round(rate, digits = 1),
+              long_name = name
+            ) %>%
+            dplyr::select(long_name, name, tm_1, tm_2, rate)
+          
+          rate_table <- extract_gene_symbol(rate_table)
+          
+          colnames(rate_table) <- c(
+            "Name", "Long name", 
+            str_c(input$time_1, "min"),
+            str_c(input$time_2, "min"),
+            "Rate (kb/min)"
+          )
+          
+          rate_table
+        }
+        
+        rate_table <- calc_rates(wave_coords)
+        
+        list(rate_table, df_merge)
       })
       
       
-      # Print table
+      # Print table 
       output$rateTable <- DT::renderDataTable(
         datatable(tablesOut()[[1]],
           options = list(
@@ -469,6 +539,22 @@ server <- function(input, output) {
           selection = list(mode = "single")
         )
       )
+      
+      # Download table
+      output$download <- downloadHandler(
+        filename = function() {
+          paste("data-", Sys.Date(), ".txt", sep="")
+        },
+        
+        content = function(file) {
+          write_tsv(tablesOut()[[1]], path = file)
+        }
+      )
+      
+      
+      ##################################
+      # Creates plot for selected gene #
+      ##################################
       
       rateTable_selected <- reactive({
         ids <- input$rateTable_rows_selected
@@ -480,9 +566,8 @@ server <- function(input, output) {
         list(gene_name, long_name, wave_1, wave_2, rate)
       })
       
-      
       # Plot data for selected gene 
-      plotOut <- eventReactive(input$plotSelected, ignoreInit = T, {
+      plotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
         # Gene target
         gene_text <- as.character(rateTable_selected()[[1]])
@@ -502,7 +587,7 @@ server <- function(input, output) {
             key = ifelse(key == "tm_2", tm2_name, key),
             key = ifelse(key == "tm_con", "Control", key),
             key = fct_inorder(key),
-            win_id = (win_id - input$win_min) * ((end - start) / 1000)
+            win_id = (win_id - win_min) * ((end - start) / 1000)
           ) %>%
           rename(Timepoint = key)
         
@@ -520,16 +605,16 @@ server <- function(input, output) {
         rate <- as.character(rateTable_selected()[[5]])
         
         # Plot colors 
-        plot_colors <- get_color(c("red_4", "blue_2", "green_2"))
+        plot_colors <- get_color(c("green_2", "red_4", "blue_2"))
         
-        # Plotted data for selected gene 
+        # Plot data for selected gene 
         input_file %>%
           ggplot(aes(win_id, count, color = Timepoint)) +
           geom_line(size = 2) +
           geom_vline(
             xintercept = c(wave_1, wave_2), 
             size = 1, linetype = 2,
-            color = plot_colors[1:2]
+            color = plot_colors[2:3]
           ) +
           scale_color_manual(values = plot_colors) +
           labs(
@@ -543,14 +628,14 @@ server <- function(input, output) {
             y = max_value, 
             label = wave_1_label,
             size = 6,
-            color = plot_colors[1]
+            color = plot_colors[2]
           ) +
           annotate("text", 
             x = wave_2 + 4, 
             y = max_value, 
             label = wave_2_label, 
             size = 6,
-            color = plot_colors[2]
+            color = plot_colors[3]
           ) +
           theme_classic() +
           theme(
@@ -570,24 +655,12 @@ server <- function(input, output) {
           )
       })
       
+      # Output plot 
       output$genePlot <- renderPlot(
           plotOut()
       )
-  
-      
-      # Download table
-      output$download <- downloadHandler(
-        filename = function() {
-          paste("data-", Sys.Date(), ".txt", sep="")
-        },
-        
-        content = function(file) {
-          write_tsv(tablesOut()[[1]], path = file)
-        }
-      )
     },
   
-    
     # Return a safeError if a parsing error occurs
     error = function(e) {
       stop(safeError(e))
