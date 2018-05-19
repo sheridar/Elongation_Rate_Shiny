@@ -432,7 +432,7 @@ server <- function(input, output) {
             res
           }
           
-          withProgress(message = "Calculating rates", {
+          withProgress(message = "Calculating rates...", {
             
             win_tot <- get_group_size(input_file, "win_id")
             gene_tot <- get_group_size(input_file, "name")  
@@ -565,9 +565,9 @@ server <- function(input, output) {
       )
       
       
-      #####################
-      # Creates metaplots #
-      #####################
+      ####################
+      # Creates metaplot #
+      ####################
       
       # Reactive to retrieve info for selected genes
       rateTable_selected <- reactive({
@@ -580,77 +580,7 @@ server <- function(input, output) {
         list(gene_name, long_name, wave_1, wave_2, rate)
       })
       
-      
-      
-      
-      
       metaplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
-        
-        # Function to create metaplots 
-        DRB_metaplot <- function(
-          input_file, 
-          plot_title = NULL, 
-          sub_title = NULL, 
-          y_title = NULL,
-          wave_1, wave_2, rate, 
-          text_pos, 
-          plot_colors = c("#cb181d", "#225ea8", "#41ab5d")
-          ) {
-        
-          wave_1_lab <- str_c(wave_1, " kb")
-          wave_2_lab <- str_c(wave_2, " kb")
-          
-          meta_plot <- input_file %>%
-            ggplot(aes(win_id, count, color = Timepoint)) +
-            geom_line(size = 2) +
-            geom_vline(
-              xintercept = c(wave_1, wave_2), 
-              size = 1, linetype = 2,
-              color = plot_colors[1:2]
-            ) +
-            labs(
-              subtitle = sub_title,
-              x = "Distance from TSS (kb)",
-              y = y_title
-            ) +
-            scale_color_manual(values = plot_colors) +
-            annotate("text", 
-              x = wave_1 + 4, 
-              y = text_pos, 
-              label = wave_1_lab,
-              size = 6,
-              color = plot_colors[1]
-            ) +
-            annotate("text", 
-              x = wave_2 + 4, 
-              y = text_pos, 
-              label = wave_2_lab, 
-              size = 6,
-              color = plot_colors[2]
-            ) +
-            theme_classic() +
-            theme(
-              strip.background = element_blank(),
-              plot.title = element_text(size = 35, face = "bold"),
-              plot.subtitle = element_text(size = 20),
-              axis.title = element_text(size = 20, face = "bold"),
-              axis.line = element_line(size = 2),
-              axis.ticks = element_line(size = 2),
-              axis.ticks.length = unit(10, units = "point"),
-              axis.text = element_text(size = 15, color = "black"),
-              legend.title = element_text(size = 20, face = "bold"),
-              legend.text = element_text(size = 18),
-              legend.text.align = 0,
-              legend.background = element_blank(),
-              legend.position = c(0.8, 0.8)
-            )
-          
-          if (!is.null(plot_title[[1]])) {
-            meta_plot <- meta_plot + labs(title = plot_title)
-          }
-          
-          meta_plot
-        }
         
         # Function to calculate mean signal 
         DRB_mean <- function(input_file, strand = F, relFreq = F) {
@@ -684,7 +614,71 @@ server <- function(input, output) {
           res
         }
         
+        # Function to create metaplots 
+        DRB_metaplot <- function(
+          input_file, 
+          plot_title = NULL, 
+          sub_title = NULL, 
+          y_title = NULL,
+          wave_1, wave_2, rate, 
+          text_pos, 
+          plot_colors = c("#cb181d", "#225ea8", "#41ab5d")
+          ) {
         
+          wave_1_lab <- str_c(wave_1, " kb")
+          wave_2_lab <- str_c(wave_2, " kb")
+          
+          meta_plot <- input_file %>%
+            ggplot(aes(win_id, count, color = Timepoint)) +
+            geom_line(size = 2) +
+            geom_vline(
+              xintercept = c(wave_1, wave_2), 
+              size = 1, linetype = 2,
+              color = plot_colors[1:2]
+            ) +
+            labs(
+              subtitle = sub_title,
+              x = "Distance from TSS (kb)",
+              y = y_title
+            ) +
+            scale_color_manual(values = plot_colors) +
+            annotate("text", 
+              x = wave_1 + 5, 
+              y = text_pos, 
+              label = wave_1_lab,
+              size = 6,
+              color = plot_colors[1]
+            ) +
+            annotate("text", 
+              x = wave_2 + 5, 
+              y = text_pos, 
+              label = wave_2_lab, 
+              size = 6,
+              color = plot_colors[2]
+            ) +
+            theme_classic() +
+            theme(
+              strip.background = element_blank(),
+              plot.title = element_text(size = 35, face = "bold"),
+              plot.subtitle = element_text(size = 20),
+              axis.title = element_text(size = 20, face = "bold"),
+              axis.line = element_line(size = 2),
+              axis.ticks = element_line(size = 2),
+              axis.ticks.length = unit(10, units = "point"),
+              axis.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 20, face = "bold"),
+              legend.text = element_text(size = 18),
+              legend.text.align = 0,
+              legend.background = element_blank(),
+              legend.position = c(0.8, 0.8)
+            )
+          
+          if (!is.null(plot_title[[1]])) {
+            meta_plot <- meta_plot + labs(title = plot_title)
+          }
+          
+          meta_plot
+        }
         
         # Input values 
         time_1  <- input$time_1
@@ -712,9 +706,11 @@ server <- function(input, output) {
             dplyr::select(name = 1) 
           
           # Wave coordinates 
-          wave_1 <- round( mean( as.numeric( rateTable_selected()[[3]] )), digits = 1)
-          wave_2 <- round( mean( as.numeric( rateTable_selected()[[4]] )), digits = 1)
-          rate   <- round( mean( as.numeric( rateTable_selected()[[5]] )), digits = 1)
+          wave_1    <- round( mean( as.numeric( rateTable_selected()[[3]] )), digits = 1)
+          wave_2    <- round( mean( as.numeric( rateTable_selected()[[4]] )), digits = 1)
+          rate      <- as.numeric(rateTable_selected()[[5]])
+          mean_rate <- round(mean(rate), digits = 1)
+          med_rate  <- round(median(rate), digits = 1)
           
           # Input file 
           df_merge %<>% semi_join(gene_targets, by = "name")
@@ -731,12 +727,20 @@ server <- function(input, output) {
             ) %>%
             rename(Timepoint = key)
           
-          # y-coord for plot annotation
-          text_pos <- input_file %>% 
-            mutate(max_value = max(count) * 0.9) %>%
+          # Coordinates for plot labels 
+          max_y <- input_file %>% 
+            mutate(max_value = max(count)) %>%
             dplyr::select(max_value) %>% 
             unique()
-          text_pos <- as.numeric(text_pos)
+          
+          max_x <- input_file %>%
+            mutate(max_value = max(win_id)) %>%
+            dplyr::select(max_value) %>%
+            unique()
+          
+          wave_text_y <- as.numeric(max_y) * 0.9
+          rate_text_x <- as.numeric(max_x) * 0.745
+          rate_text_y <- as.numeric(max_y) * 0.5
           
           # Created metaplots 
           if (length(gene_text) == 1) {
@@ -748,34 +752,42 @@ server <- function(input, output) {
               wave_1 = wave_1, 
               wave_2 = wave_2, 
               rate = rate, 
-              text_pos = text_pos
+              text_pos = wave_text_y
             )
           
           } else {
             DRB_metaplot(
               input_file, 
-              plot_title = "",
-              sub_title = str_c(rate, " kb/min"),
+              sub_title = "",
               y_title = "Average Signal",
               wave_1 = wave_1, 
               wave_2 = wave_2, 
               rate = rate, 
-              text_pos = text_pos
-            )
+              text_pos = wave_text_y
+            ) +
+              annotate("text", 
+                x = rate_text_x, 
+                y = rate_text_y, 
+                label = str_c("Mean: ", mean_rate, " kb/min\nMedian: ", med_rate, " kb/min"), 
+                size = 6.5,
+                hjust = 0
+              )
           }
             
         } else {
           
           gene_name <- tablesOut()[[1]][, 1]
           long_name <- tablesOut()[[1]][, 2]
-          wave_1    <- tablesOut()[[1]][, 3]
-          wave_2    <- tablesOut()[[1]][, 4]
-          rate      <- tablesOut()[[1]][, 5]
+          wave_1    <- as.numeric(tablesOut()[[1]][, 3])
+          wave_2    <- as.numeric(tablesOut()[[1]][, 4])
+          rate      <- as.numeric(tablesOut()[[1]][, 5])
           
           # Wave coordinates 
-          wave_1 <- round( mean( as.numeric( wave_1 )), digits = 1)
-          wave_2 <- round( mean( as.numeric( wave_2 )), digits = 1)
-          rate   <- round( mean( as.numeric( rate )), digits = 1)
+          wave_1    <- round( mean( wave_1 ), digits = 1)
+          wave_2    <- round( mean( wave_2 ), digits = 1)
+          mean_rate <- round( mean( rate ), digits = 1)
+          med_rate <- round( median( rate ), digits = 1)
+          
           
           # Input file 
           df_mean <- DRB_mean(df_merge, strand = F, relFreq = F)
@@ -790,24 +802,38 @@ server <- function(input, output) {
             ) %>%
             rename(Timepoint = key)
           
-          # y-coord for plot annotation
-          text_pos <- input_file %>% 
-            mutate(max_value = max(count) * 0.9) %>%
+          # Coordinates for plot labels 
+          max_y <- input_file %>% 
+            mutate(max_value = max(count)) %>%
             dplyr::select(max_value) %>% 
             unique()
-          text_pos <- as.numeric(text_pos)
+          
+          max_x <- input_file %>%
+            mutate(max_value = max(win_id)) %>%
+            dplyr::select(max_value) %>%
+            unique()
+          
+          wave_text_y <- as.numeric(max_y) * 0.9
+          rate_text_x <- as.numeric(max_x) * 0.745
+          rate_text_y <- as.numeric(max_y) * 0.5
           
           # Created metaplots
           DRB_metaplot(
             input_file, 
-            plot_title = "",
-            sub_title = str_c(rate, " kb/min"),
+            sub_title = "",
             y_title = "Average Signal",
             wave_1 = wave_1, 
             wave_2 = wave_2, 
             rate = rate, 
-            text_pos = text_pos
-          )
+            text_pos = wave_text_y
+          ) +
+            annotate("text", 
+              x = rate_text_x, 
+              y = rate_text_y, 
+              label = str_c("Mean: ", mean_rate, " kb/min\nMedian: ", med_rate, " kb/min"), 
+              size = 6.5,
+              hjust = 0
+            )
         }
       })
       
@@ -821,6 +847,33 @@ server <- function(input, output) {
       
       boxplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
+        # Function to create boxplot
+        DRB_boxplot <- function(input_file, plot_colors = "#cb181d") {
+          
+          input_file %>% 
+            ggplot(aes("", rate)) + 
+            geom_boxplot(size = 2, color = plot_colors) +
+            labs(
+              title = "",
+              x = "",
+              y = "log2 Elongation Rate (kb/min)"
+            ) +
+            theme_classic() +
+            theme(
+              legend.key.size   = element_blank(),
+              strip.background  = element_blank(),
+              axis.title        = element_text(size = 20, face = "bold"),
+              axis.line         = element_line(size = 2),
+              axis.ticks        = element_line(size = 2),
+              axis.ticks.length = unit(10, units = "point"),
+              axis.ticks.x      = element_blank(),
+              axis.text         = element_text(size = 15, color = "black"),
+              legend.title      = element_blank(),
+              legend.text       = element_blank(),
+              legend.background = element_blank()
+            )
+        }
+        
         rate_table <- as_data_frame(tablesOut()[[1]]) %>%
           dplyr::select(
             name = 1, long_name = 2,
@@ -829,39 +882,33 @@ server <- function(input, output) {
           ) %>%
           mutate(key = "dataset")
         
-        rate_table %>% 
-          ggplot(aes("", log2(rate))) + 
-          geom_boxplot(size = 2) +
-          #scale_color_manual(values = "#225ea8") +
-          labs(
-            title = "",
-            x = "",
-            y = "log2 Elongation Rate (kb/min)"
-          ) +
-          theme_classic() +
-          theme(
-            legend.key.size   = element_blank(),
-            strip.background  = element_blank(),
-            axis.title        = element_text(size = 20, face = "bold"),
-            axis.line         = element_line(size = 2),
-            axis.ticks        = element_line(size = 2),
-            axis.ticks.length = unit(10, units = "point"),
-            axis.ticks.x      = element_blank(),
-            axis.text         = element_text(size = 15, color = "black"),
-            legend.title      = element_blank(),
-            legend.text       = element_blank(),
-            legend.background = element_blank()
-          )
+        box_len <- dim(rate_table)[[1]]
         
-        
-        
-        #if (!is.null(input$rateTable_rows_selected)) {
-        #  input_file <- as_data_frame(rateTable_selected()[[5]])
-        #}
-        
-        
-        
-        
+        if (!is.null(input$rateTable_rows_selected)) {
+          new_points <- rateTable_selected()[[5]]
+          
+          point_len <- length(new_points)
+          
+          na_len <- box_len - point_len
+          
+          box_points <- c(new_points, rep(NA, na_len))
+          
+          if (point_len > 20) {
+            
+            rate_table <- data.frame(rate = new_points)
+            
+            box_output <- DRB_boxplot(rate_table)
+             
+          } else {
+            box_output <- DRB_boxplot(rate_table) +
+              geom_jitter(aes(y = box_points), color = "#225ea8", width = 0.1, height = 0, size = 4)
+          }
+          
+        } else {
+          box_output <- DRB_boxplot(rate_table)
+        }
+          
+        box_output
       })
       
       # Output boxplot
