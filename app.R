@@ -141,7 +141,11 @@ ui <- fluidPage(
     )
   ),
   
-  fluidRow(plotOutput(width = 925, "metaPlot"))
+  fluidRow(
+    #column(9, plotOutput(width = 925, "metaPlot")),
+    column(9, plotOutput("metaPlot")),
+    column(3, plotOutput("boxPlot"))
+  )
 )
 
 
@@ -538,7 +542,7 @@ server <- function(input, output) {
       })
       
       
-      # Print table 
+      # Output table 
       output$rateTable <- DT::renderDataTable(
         datatable(tablesOut()[[1]],
           options = list(
@@ -565,7 +569,22 @@ server <- function(input, output) {
       # Creates metaplots #
       #####################
       
-      plotOut <- eventReactive(input$createPlot, ignoreInit = T, {
+      # Reactive to retrieve info for selected genes
+      rateTable_selected <- reactive({
+        ids <- input$rateTable_rows_selected
+        gene_name <- tablesOut()[[1]][ids, 1]
+        long_name <- tablesOut()[[1]][ids, 2]
+        wave_1    <- tablesOut()[[1]][ids, 3]
+        wave_2    <- tablesOut()[[1]][ids, 4]
+        rate      <- tablesOut()[[1]][ids, 5]
+        list(gene_name, long_name, wave_1, wave_2, rate)
+      })
+      
+      
+      
+      
+      
+      metaplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
         # Function to create metaplots 
         DRB_metaplot <- function(
@@ -575,7 +594,7 @@ server <- function(input, output) {
           y_title = NULL,
           wave_1, wave_2, rate, 
           text_pos, 
-          plot_colors = c("#41ab5d", "#cb181d", "#225ea8")
+          plot_colors = c("#cb181d", "#225ea8", "#41ab5d")
           ) {
         
           wave_1_lab <- str_c(wave_1, " kb")
@@ -587,7 +606,7 @@ server <- function(input, output) {
             geom_vline(
               xintercept = c(wave_1, wave_2), 
               size = 1, linetype = 2,
-              color = plot_colors[2:3]
+              color = plot_colors[1:2]
             ) +
             labs(
               subtitle = sub_title,
@@ -600,14 +619,14 @@ server <- function(input, output) {
               y = text_pos, 
               label = wave_1_lab,
               size = 6,
-              color = plot_colors[2]
+              color = plot_colors[1]
             ) +
             annotate("text", 
               x = wave_2 + 4, 
               y = text_pos, 
               label = wave_2_lab, 
               size = 6,
-              color = plot_colors[3]
+              color = plot_colors[2]
             ) +
             theme_classic() +
             theme(
@@ -675,7 +694,7 @@ server <- function(input, output) {
         
         win_min <- input$win_min
         
-        df_merge <- as_data_frame(tablesOut()[[2]])  
+        df_merge <- as_data_frame(tablesOut()[[2]]) 
         
         win_len <- df_merge %>% 
           mutate(len = (end - start) / 1000) %>% 
@@ -687,17 +706,6 @@ server <- function(input, output) {
         # Create metaplot for selected gene
         if (!is.null(input$rateTable_rows_selected)) {
           
-          # Reactive to retrieve info for selected gene
-          rateTable_selected <- reactive({
-            ids <- input$rateTable_rows_selected
-            gene_name <- tablesOut()[[1]][ids, 1]
-            long_name <- tablesOut()[[1]][ids, 2]
-            wave_1    <- tablesOut()[[1]][ids, 3]
-            wave_2    <- tablesOut()[[1]][ids, 4]
-            rate      <- tablesOut()[[1]][ids, 5]
-            list(gene_name, long_name, wave_1, wave_2, rate)
-          })
-          
           # Gene targets
           gene_text <- as.character(rateTable_selected()[[1]])
           gene_targets <- as_data_frame(rateTable_selected()[[2]]) %>% 
@@ -706,7 +714,7 @@ server <- function(input, output) {
           # Wave coordinates 
           wave_1 <- round( mean( as.numeric( rateTable_selected()[[3]] )), digits = 1)
           wave_2 <- round( mean( as.numeric( rateTable_selected()[[4]] )), digits = 1)
-          rate   <- round( mean( as.numeric( rateTable_selected()[[5]])), digits = 1)
+          rate   <- round( mean( as.numeric( rateTable_selected()[[5]] )), digits = 1)
           
           # Input file 
           df_merge %<>% semi_join(gene_targets, by = "name")
@@ -747,7 +755,7 @@ server <- function(input, output) {
             DRB_metaplot(
               input_file, 
               plot_title = "",
-              sub_title = str_c("Average rate: ", rate, " kb/min"),
+              sub_title = str_c(rate, " kb/min"),
               y_title = "Average Signal",
               wave_1 = wave_1, 
               wave_2 = wave_2, 
@@ -793,7 +801,7 @@ server <- function(input, output) {
           DRB_metaplot(
             input_file, 
             plot_title = "",
-            sub_title = str_c("Average rate: ", rate, " kb/min"),
+            sub_title = str_c(rate, " kb/min"),
             y_title = "Average Signal",
             wave_1 = wave_1, 
             wave_2 = wave_2, 
@@ -803,9 +811,62 @@ server <- function(input, output) {
         }
       })
       
+      # Output metaplot
+      output$metaPlot <- renderPlot(metaplotOut())
       
-      # Output plot 
-      output$metaPlot <- renderPlot(plotOut())
+      
+      ###################
+      # Creates boxplot #
+      ###################
+      
+      boxplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
+        
+        rate_table <- as_data_frame(tablesOut()[[1]]) %>%
+          dplyr::select(
+            name = 1, long_name = 2,
+            wave_1 = 3, wave_2 = 4, 
+            rate = 5
+          ) %>%
+          mutate(key = "dataset")
+        
+        rate_table %>% 
+          ggplot(aes("", log2(rate))) + 
+          geom_boxplot(size = 2) +
+          #scale_color_manual(values = "#225ea8") +
+          labs(
+            title = "",
+            x = "",
+            y = "log2 Elongation Rate (kb/min)"
+          ) +
+          theme_classic() +
+          theme(
+            legend.key.size   = element_blank(),
+            strip.background  = element_blank(),
+            axis.title        = element_text(size = 20, face = "bold"),
+            axis.line         = element_line(size = 2),
+            axis.ticks        = element_line(size = 2),
+            axis.ticks.length = unit(10, units = "point"),
+            axis.ticks.x      = element_blank(),
+            axis.text         = element_text(size = 15, color = "black"),
+            legend.title      = element_blank(),
+            legend.text       = element_blank(),
+            legend.background = element_blank()
+          )
+        
+        
+        
+        #if (!is.null(input$rateTable_rows_selected)) {
+        #  input_file <- as_data_frame(rateTable_selected()[[5]])
+        #}
+        
+        
+        
+        
+      })
+      
+      # Output boxplot
+      output$boxPlot <- renderPlot(boxplotOut())
+      
     },
   
     # Return a safeError if a parsing error occurs
