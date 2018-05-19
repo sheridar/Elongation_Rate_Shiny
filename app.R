@@ -1,4 +1,17 @@
 
+
+req_packages <- c(
+  "depmixS4", "DT",
+  "shiny", "tidyverse",
+  "magrittr", "rlang"
+)
+
+missing_packages <- req_packages[ !(req_packages %in% installed.packages()[, "Package"]) ]
+
+if (length(missing_packages)) {
+  install.packages(missing_packages)
+}
+
 library(depmixS4)
 library(DT)
 library(shiny)
@@ -6,46 +19,13 @@ library(shinythemes)
 library(tidyverse)
 library(magrittr)
 
-# Color list 
-color_list <- list(
-  purple_1 = "#253494",
-  orange_1 = "#fe9929",
-  orange_2 = "#ec7014",
-  brown_1  = "#cc4c02",
-  brown_2  = "#993404",
-  green_1  = "#78c679",
-  green_2  = "#41ab5d",
-  green_3  = "#238443",
-  blue_1 = "#3288bd",
-  blue_2 = "#225ea8",
-  blue_3 = "#08519c",
-  aqua_1 = "#41b6c4",
-  grey_1 = "#969696",
-  grey_2 = "#737373",
-  grey_3 = "#525252",
-  black  = "black",
-  red_1  = "#fc4e2a",
-  red_2  = "#e31a1c",
-  red_3  = "#bd0026",
-  red_4  = "#cb181d"
-)
-
-# Function to retrieve colors from color_list
-get_color <- function(targets) {
-  as.character(color_list[targets])
-}
-
-# Plot colors 
-plot_colors <- get_color(c("green_2", "red_4", "blue_2"))
-
-
 
 # Define UI for data upload app ----
 ui <- fluidPage(
   
   tags$head(
     tags$style(HTML("
-      @import url('https://fonts.googleapis.com/css?family=Roboto:700');
+      @import url('https://fonts.googleapis.com/css?family=Roboto:900');
       h1 {
         font-family: 'Roboto', sans-serif;
         font-weight: 500;
@@ -361,18 +341,11 @@ server <- function(input, output) {
           # Function to retrieve group size
           get_group_size <- function(input_file, col_name) {
             
-            if (col_name == "name") {
-              res <- input_file %>% group_by(name)
-              
-            } else if (col_name == "key") {
-              res <- input_file %>% group_by(key)
-              
-            } else if (col_name == "win_id") {
-              res <- input_file %>% group_by(win_id)
-            }
+            target_col <- sym(col_name)
             
-            res %<>%
-              group_size() %>%
+            res <- input_file %>%
+              group_by(!!target_col) %>%
+              group_size() %>% 
               length()
             
             res
@@ -622,7 +595,7 @@ server <- function(input, output) {
           y_title = NULL,
           wave_1, wave_2, rate, 
           text_pos, 
-          plot_colors = c("#cb181d", "#225ea8", "#41ab5d")
+          plot_colors = c("#41ab5d", "#cb181d", "#225ea8")
           ) {
         
           wave_1_lab <- str_c(wave_1, " kb")
@@ -634,7 +607,7 @@ server <- function(input, output) {
             geom_vline(
               xintercept = c(wave_1, wave_2), 
               size = 1, linetype = 2,
-              color = plot_colors[1:2]
+              color = plot_colors[2:3]
             ) +
             labs(
               subtitle = sub_title,
@@ -647,14 +620,14 @@ server <- function(input, output) {
               y = text_pos, 
               label = wave_1_lab,
               size = 6,
-              color = plot_colors[1]
+              color = plot_colors[2]
             ) +
             annotate("text", 
               x = wave_2 + 5, 
               y = text_pos, 
               label = wave_2_lab, 
               size = 6,
-              color = plot_colors[2]
+              color = plot_colors[3]
             ) +
             theme_classic() +
             theme(
@@ -697,7 +670,7 @@ server <- function(input, output) {
         
         win_len <- win_len$len 
         
-        # Create metaplot for selected gene
+        # Create metaplot for selected genes
         if (!is.null(input$rateTable_rows_selected)) {
           
           # Gene targets
@@ -722,8 +695,8 @@ server <- function(input, output) {
               key = ifelse(key == "tm_1", tm1_name, key),
               key = ifelse(key == "tm_2", tm2_name, key),
               key = ifelse(key == "tm_con", "Control", key),
-              key = fct_inorder(key),
-              win_id = (win_id - win_min) * win_len
+              win_id = (win_id - win_min) * win_len, 
+              key = fct_relevel(key, c("Control", tm1_name, tm2_name))
             ) %>%
             rename(Timepoint = key)
           
@@ -776,18 +749,17 @@ server <- function(input, output) {
             
         } else {
           
+          # Wave coordinates 
           gene_name <- tablesOut()[[1]][, 1]
           long_name <- tablesOut()[[1]][, 2]
           wave_1    <- as.numeric(tablesOut()[[1]][, 3])
           wave_2    <- as.numeric(tablesOut()[[1]][, 4])
           rate      <- as.numeric(tablesOut()[[1]][, 5])
           
-          # Wave coordinates 
           wave_1    <- round( mean( wave_1 ), digits = 1)
           wave_2    <- round( mean( wave_2 ), digits = 1)
           mean_rate <- round( mean( rate ), digits = 1)
           med_rate <- round( median( rate ), digits = 1)
-          
           
           # Input file 
           df_mean <- DRB_mean(df_merge, strand = F, relFreq = F)
@@ -797,8 +769,8 @@ server <- function(input, output) {
               key = ifelse(key == "tm_1", tm1_name, key),
               key = ifelse(key == "tm_2", tm2_name, key),
               key = ifelse(key == "tm_con", "Control", key),
-              key = fct_inorder(key),
-              win_id = (win_id - win_min) * win_len
+              win_id = (win_id - win_min) * win_len,
+              key = fct_relevel(key, c("Control", tm1_name, tm2_name))
             ) %>%
             rename(Timepoint = key)
           
@@ -856,7 +828,7 @@ server <- function(input, output) {
             labs(
               title = "",
               x = "",
-              y = "log2 Elongation Rate (kb/min)"
+              y = "Elongation Rate (kb/min)"
             ) +
             theme_classic() +
             theme(
