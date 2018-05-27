@@ -1,23 +1,22 @@
 
-
+# Install required packages ----
 req_packages <- c(
   "depmixS4", "DT",
   "shiny", "tidyverse",
   "magrittr", "rlang"
 )
 
-missing_packages <- req_packages[ !(req_packages %in% installed.packages()[, "Package"]) ]
+avail_packages <- installed.packages()[, "Package"]
+
+missing_packages <- req_packages[ !(req_packages %in% avail_packages) ]
 
 if (length(missing_packages)) {
   install.packages(missing_packages)
 }
 
-library(depmixS4)
-library(DT)
-library(shiny)
-library(shinythemes)
-library(tidyverse)
-library(magrittr)
+for (i in 1:length(req_packages)) {
+  library(req_packages[i], character.only = T)
+}
 
 
 # Define UI for data upload app ----
@@ -363,10 +362,12 @@ server <- function(input, output) {
             
             for (i in 0:(gene_tot - 1)) {
               count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
-              count_in <- data.frame(count_in) 
+              count_in <- as.numeric(smooth(count_in))
               win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
               
-              HMMmod <- depmix(response = count_in ~ 1, data = count_in, nstates = 2, trstart = runif(4))
+              trstart_val <- c(0.7, 0.2, 0.002, 0.3)
+              HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = trstart_val)
+              #HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = runif(4))
               
               tryCatch(
                 HMMfit <- fit(HMMmod, emc = em.control(rand = FALSE)),
@@ -447,8 +448,14 @@ server <- function(input, output) {
         # Calculated elongation rates #
         ###############################
         
+        col_names <- c(
+          "Name", "Long_name", 
+          tm1_name, tm2_name,
+          "Rate (kb/min)"
+        )
+        
         # Function to calculate elongation rates 
-        calc_rates <- function(input_file) {
+        calc_rates <- function(input_file, time_1, time_2, col_names, win_min = 1, win_max = 200, win_len = 0.5) {
           
           # Function to extract gene symbols from dataframe
           extract_gene_symbol <- function(input_file) {
@@ -500,16 +507,12 @@ server <- function(input, output) {
           
           rate_table <- extract_gene_symbol(rate_table)
           
-          colnames(rate_table) <- c(
-            "Name", "Long_name", 
-            tm1_name, tm2_name,
-            "Rate (kb/min)"
-          )
+          colnames(rate_table) <- col_names
           
           rate_table
         }
         
-        rate_table <- calc_rates(wave_coords)
+        rate_table <- calc_rates(wave_coords, time_1, time_2, col_names, win_min, win_max, win_len)
         
         list(rate_table, df_merge)
       })
@@ -603,7 +606,7 @@ server <- function(input, output) {
           
           meta_plot <- input_file %>%
             ggplot(aes(win_id, count, color = Timepoint)) +
-            geom_line(size = 2) +
+            geom_line(size = 3) +
             geom_vline(
               xintercept = c(wave_1, wave_2), 
               size = 1, linetype = 2,
@@ -808,6 +811,7 @@ server <- function(input, output) {
             )
         }
       })
+      
       
       # Output metaplot
       output$metaPlot <- renderPlot(metaplotOut())
