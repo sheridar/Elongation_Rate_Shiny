@@ -180,30 +180,115 @@ server <- function(input, output) {
     
         file_list <- list(con_path, file1_path, file2_path)
         df_list <- map(file_list, function(x) read_tsv(x, col_names))
+        gene_list <- read_tsv(genes_path, "name")
         
-        if (!is.null(genes)) {
-          gene_list <- read_tsv(genes_path, "name")
-          
-          df_list <- map(df_list, function(x){
-            x %>% semi_join(gene_list, by = "name") 
-          })
-        }
-        
-        name_list <- list("tm_con", "tm_1", "tm_2")
-        names(df_list) <- name_list
+        # if (!is.null(genes)) {
+        #   gene_list <- read_tsv(genes_path, "name")
+        #   
+        #   df_list <- map(df_list, function(x){
+        #     x %>% 
+        #       left_join(gene_list, by = "name") %>%
+        #       na.omit() 
+        #   })
+        # }
+        # 
+        # name_list <- list("tm_con", "tm_1", "tm_2")
+        # names(df_list) <- name_list
         
         
         #################
         # Merged tables #
         #################
         
-        # Function to merge tables
-        DRB_merge <- function(input, win_min = 1, win_max = 200) {
+        # # Function to merge tables
+        # DRB_merge <- function(input, win_min = 1, win_max = 200) {
+        #   
+        #   # Function to add "key" columns to list of dfs
+        #   add_key <- function(input) {
+        #     
+        #     tbl_list <- list()
+        #     
+        #     for (i in seq_along(input)) {
+        #       x <- input[i] 
+        #       y <- data.frame(x)
+        #       
+        #       new_names <- str_replace(colnames(y), str_c(names(x), "."), "")
+        #       colnames(y) <- str_replace(new_names, "count", names(x))
+        #       
+        #       tbl_list <- c(tbl_list, list(y))
+        #     }
+        #     
+        #     tbl_list
+        #   }
+        #   
+        #   # Function to merge tables
+        #   tbl_merge <- function(input, merge_by = "name") {
+        #     
+        #     tbl_list <- add_key(input) 
+        #     
+        #     # Merged tables 
+        #     res <- purrr::reduce(tbl_list, function(x, y) {
+        #       left_join(x, y, by = merge_by)
+        #     }) %>% 
+        #       na.omit()
+        #     
+        #     res
+        #   }
+        #   
+        #   # Selected columns and filtered 
+        #   res <- map(input, function(x) {
+        #     x %>% 
+        #       dplyr::select(chrom, start, end, name, win_id, count) %>%
+        #       group_by(name) %>%
+        #       filter(
+        #         win_id >= win_min,
+        #         win_id <= win_max
+        #       ) %>%
+        #       filter(
+        #         min(win_id) == win_min,
+        #         max(win_id) == win_max,
+        #         sum(count) > 0
+        #       ) %>% 
+        #       ungroup()
+        #   })
+        #   
+        #   # Merged tables 
+        #   res <- tbl_merge(res, merge_by = c("chrom", "start", "end", "name", "win_id")) %>%
+        #     gather(key, count, -chrom, -start, -end, -name, -win_id)
+        #   
+        #   res
+        # }
+        
+        # Function to merge tables 
+        DRB_merge <- function(input, gene_list, win_min = 1, win_max = 200, merge_by = c("name", "win_id")) {
+          
+          # Function to calculate distance from TSS 
+          calc_kb <- function(input, id_col, len_col) {
+            
+            input_sort <- input %>% 
+              ungroup() %>% 
+              arrange(!!sym(id_col)) 
+            
+            lens <- c(input_sort[[len_col]])
+            
+            kb_tot <- 0
+            kb_list <- vector("double", length(lens))
+            
+            for (i in seq_along(lens)) {
+              kb_list[i] <- kb_tot
+              kb_tot <- kb_tot + lens[i]
+            }
+            
+            kb_list <- tibble(kb_dist = kb_list)
+            res <- bind_cols(input_sort, kb_list)
+            
+            res
+          }
           
           # Function to add "key" columns to list of dfs
           add_key <- function(input) {
             
-            tbl_list <- list()
+            res <- list()
             
             for (i in seq_along(input)) {
               x <- input[i] 
@@ -212,30 +297,37 @@ server <- function(input, output) {
               new_names <- str_replace(colnames(y), str_c(names(x), "."), "")
               colnames(y) <- str_replace(new_names, "count", names(x))
               
-              tbl_list <- c(tbl_list, list(y))
+              res <- c(res, list(y))
             }
             
-            tbl_list
+            res
           }
           
           # Function to merge tables
-          tbl_merge <- function(input, merge_by = "name") {
+          tbl_merge <- function(input, ...) {
             
             tbl_list <- add_key(input) 
             
-            # Merged tables 
+            # Merge tables 
             res <- purrr::reduce(tbl_list, function(x, y) {
-              left_join(x, y, by = merge_by)
+              left_join(x, y, ...)
             }) %>% 
               na.omit()
             
             res
           }
           
-          # Selected columns and filtered 
+          # Table names
+          tbl_names <- names(input)
+          
+          # Filter and calculate distance from TSS 
           res <- map(input, function(x) {
+            
+            # Filter by win_min and win_max
             x %>% 
-              dplyr::select(chrom, start, end, name, win_id, count) %>%
+              left_join(gene_list, by = "name") %>%
+              na.omit() %>% 
+              dplyr::select(-strand) %>% 
               group_by(name) %>%
               filter(
                 win_id >= win_min,
@@ -245,29 +337,37 @@ server <- function(input, output) {
                 min(win_id) == win_min,
                 max(win_id) == win_max,
                 sum(count) > 0
+              ) %>%
+              ungroup() %>%
+              
+              # Calculate distance for each window
+              mutate(
+                win_id = win_id - win_min,
+                win_len = (end - start) / 1000
               ) %>% 
-              ungroup()
+              group_by(name) %>%
+              nest() %>%
+              mutate(
+                data = map(data, ~calc_kb(.x, id_col = "win_id", len_col = "win_len"))
+              ) %>%
+              unnest() %>%
+              ungroup() %>%
+              dplyr::select(name, length, win_id, kb_dist, count)
           })
           
-          # Merged tables 
-          res <- tbl_merge(res, merge_by = c("chrom", "start", "end", "name", "win_id")) %>%
-            gather(key, count, -chrom, -start, -end, -name, -win_id)
+          # Merge tables 
+          res <- tbl_merge(res, by = merge_by) %>%
+            gather_("key", "count", tbl_names)
           
           res
         }
         
-        df_merge <- DRB_merge(df_list, win_min = win_min, win_max = win_max)
+        df_merge <- DRB_merge(df_list, gene_list, win_min = 51, win_max = 190, merge_by = c("name", "length", "win_id", "kb_dist"))
         
-        win_len <- df_merge %>% 
-          mutate(len = (end - start) / 1000) %>% 
-          group_by(len) %>% 
-          summarize(n())
-        
-        win_len <- win_len$len 
-        
-        #if (nrow(win_len) != 1) {
-        #  stop("Windows are not the same length")
-        #}
+        # win_len <- df_merge %>% 
+        #   mutate(len = (end - start) / 1000) %>% 
+        #   group_by(len) %>% 
+        #   summarize(n())
         
         
         #####################
@@ -275,156 +375,129 @@ server <- function(input, output) {
         #####################
         
         # OLD VERSION
-        DRB_norm <- function(input_file, win_min = 1, win_max = 200, win_tot = 200) {
-          
-          # Function to calculate the distance from TSS 
-          calc_kb <- function(input, id_col, len_col) {
-            
-            id_sym <- sym(id_col)
-            
-            input_sort <- input %>% 
-              ungroup() %>% 
-              arrange(!!id_sym) 
-            
-            lens <- c(input_sort[[len_col]])
-            
-            kb_tot <- 0
-            kb_list <- vector("double", length(lens))
-            
-            for (i in seq_along(lens)) {
-              kb_list[i] <- kb_tot
-              kb_tot <- kb_tot + lens[i]
-            }
-            
-            kb_list <- tibble(kb_dist = kb_list)
-            res <- bind_cols(input_sort, kb_list)
-            
-            res
-          }
-          
-          # Values used for window merging
-          win_num <- length(seq(win_min, win_max))
-          mutate_num <- round(win_num / win_tot)
-          
-          # Merged windows  
-          res <- input_file %>% 
-            mutate(
-              win_id = win_id - win_min,
-              win_id = floor(win_id / mutate_num),
-              win_len = (end - start) / 1000
-            ) %>% 
-            group_by(name, key, win_id) %>% 
-            summarize(
-              count = mean(count), 
-              win_len = sum(win_len)
-            ) %>%
-            group_by(key, name) %>%
-            nest() %>%
-            mutate(data = map(data, ~calc_kb(.x, id_col = "win_id", len_col = "win_len"))) %>%
-            unnest() %>% 
-            dplyr::select(-win_len)
-          
-          # Added pseudo count 
-          win_cutoff <- max(res$win_id) - 5
-          
-          res %<>%  
-            group_by(key, name) %>% 
-            mutate(zero = ifelse(count == 0, T, F)) %>% 
-            group_by(key, name, zero) %>% 
-            mutate(min_count = min(count)) %>%
-            group_by(key, name) %>% 
-            mutate(count = ifelse(count == 0, max(min_count) / 2, count)) %>% 
-            ungroup() %>% 
-            dplyr::select(-zero, -min_count) %>% 
-            
-            # Normalized by -DRB signal 
-            separate(key, sep = "_", into = c("treatment", "tm")) %>% 
-            spread(tm, count) %>%
-            gather(tm, count, -name, -win_id, -kb_dist, -treatment, -con) %>% 
-            mutate(count = count / con) %>%
-            dplyr::select(-con) %>% 
-            
-            # Normalized ratios by the average ratio for the last 5 bins 
-            unite(key, treatment, tm, sep = "_") %>% 
-            mutate(win_type = ifelse(win_id > win_cutoff, "con_wins", "data_wins")) %>% 
-            group_by(key, name, win_type) %>% 
-            mutate(ave_signal = mean(count)) %>% 
-            ungroup() %>% 
-            spread(win_type, ave_signal) %>% 
-            mutate(con_wins = ifelse(is.na(con_wins), 0, con_wins)) %>% 
-            group_by(name, key) %>% 
-            mutate(con_wins = max(con_wins)) %>% 
-            ungroup() %>% 
-            mutate(count = count / con_wins) %>% 
-            dplyr::select(-data_wins, -con_wins) %>% 
-            
-            # Digitized ratios to a range of 0 - 2.0 and step size of 0.5
-            group_by(name, key) %>%
-            mutate(max_count = max(count)) %>% 
-            ungroup() %>% 
-            mutate(
-              count = (count / max_count) * 2,
-              count = floor(count / 0.05) / 20
-            ) %>%
-            dplyr::select(-max_count, -win_id) %>%
-            rename(win_id = kb_dist)
-          
-          res
-        }
-        
+        # DRB_norm <- function(input_file, win_min = 1, win_max = 200, win_tot = 200) {
+        #   
+        #   # Function to calculate the distance from TSS 
+        #   calc_kb <- function(input, id_col, len_col) {
+        #     
+        #     id_sym <- sym(id_col)
+        #     
+        #     input_sort <- input %>% 
+        #       ungroup() %>% 
+        #       arrange(!!id_sym) 
+        #     
+        #     lens <- c(input_sort[[len_col]])
+        #     
+        #     kb_tot <- 0
+        #     kb_list <- vector("double", length(lens))
+        #     
+        #     for (i in seq_along(lens)) {
+        #       kb_list[i] <- kb_tot
+        #       kb_tot <- kb_tot + lens[i]
+        #     }
+        #     
+        #     kb_list <- tibble(kb_dist = kb_list)
+        #     res <- bind_cols(input_sort, kb_list)
+        #     
+        #     res
+        #   }
+        #   
+        #   # Values used for window merging
+        #   win_num <- length(seq(win_min, win_max))
+        #   mutate_num <- round(win_num / win_tot)
+        #   
+        #   # Merged windows  
+        #   res <- input_file %>% 
+        #     mutate(
+        #       win_id = win_id - win_min,
+        #       win_id = floor(win_id / mutate_num),
+        #       win_len = (end - start) / 1000
+        #     ) %>% 
+        #     group_by(name, key, win_id) %>% 
+        #     summarize(
+        #       count = mean(count), 
+        #       win_len = sum(win_len)
+        #     ) %>%
+        #     group_by(key, name) %>%
+        #     nest() %>%
+        #     mutate(data = map(data, ~calc_kb(.x, id_col = "win_id", len_col = "win_len"))) %>%
+        #     unnest() %>% 
+        #     dplyr::select(-win_len)
+        #   
+        #   # Added pseudo count 
+        #   win_cutoff <- max(res$win_id) - 5
+        #   
+        #   res %<>%  
+        #     group_by(key, name) %>% 
+        #     mutate(zero = ifelse(count == 0, T, F)) %>% 
+        #     group_by(key, name, zero) %>% 
+        #     mutate(min_count = min(count)) %>%
+        #     group_by(key, name) %>% 
+        #     mutate(count = ifelse(count == 0, max(min_count) / 2, count)) %>% 
+        #     ungroup() %>% 
+        #     dplyr::select(-zero, -min_count) %>% 
+        #     
+        #     # Normalized by -DRB signal 
+        #     separate(key, sep = "_", into = c("treatment", "tm")) %>% 
+        #     spread(tm, count) %>%
+        #     gather(tm, count, -name, -win_id, -kb_dist, -treatment, -con) %>% 
+        #     mutate(count = count / con) %>%
+        #     dplyr::select(-con) %>% 
+        #     
+        #     # Normalized ratios by the average ratio for the last 5 bins 
+        #     unite(key, treatment, tm, sep = "_") %>% 
+        #     mutate(win_type = ifelse(win_id > win_cutoff, "con_wins", "data_wins")) %>% 
+        #     group_by(key, name, win_type) %>% 
+        #     mutate(ave_signal = mean(count)) %>% 
+        #     ungroup() %>% 
+        #     spread(win_type, ave_signal) %>% 
+        #     mutate(con_wins = ifelse(is.na(con_wins), 0, con_wins)) %>% 
+        #     group_by(name, key) %>% 
+        #     mutate(con_wins = max(con_wins)) %>% 
+        #     ungroup() %>% 
+        #     mutate(count = count / con_wins) %>% 
+        #     dplyr::select(-data_wins, -con_wins) %>% 
+        #     
+        #     # Digitized ratios to a range of 0 - 2.0 and step size of 0.5
+        #     group_by(name, key) %>%
+        #     mutate(max_count = max(count)) %>% 
+        #     ungroup() %>% 
+        #     mutate(
+        #       count = (count / max_count) * 2,
+        #       count = floor(count / 0.05) / 20
+        #     ) %>%
+        #     dplyr::select(-max_count, -win_id) %>%
+        #     rename(win_id = kb_dist)
+        #   
+        #   res
+        # }
+        # 
         
         # Function to normalize signal
-        DRB_norm <- function(input_file, win_min = 1, win_max = 200, win_tot = 100) {
+        DRB_norm <- function(input, win_tot = 60) {
           
-          # Function to calculate distance from TSS 
-          calc_kb <- function(input, id_col, len_col) {
+          # Remove windows that are past pAS
+          res <- input %>% 
+            filter(kb_dist < length) %>% 
+            group_by(key, name) %>% 
+            mutate(win_count = n()) %>%
+            filter(win_count >= win_tot) %>% 
+            ungroup() %>%
             
-            id_sym <- sym(id_col)
-            
-            input_sort <- input %>% 
-              ungroup() %>% 
-              arrange(!!id_sym) 
-            
-            lens <- c(input_sort[[len_col]])
-            
-            kb_tot <- 0
-            kb_list <- vector("double", length(lens))
-            
-            for (i in seq_along(lens)) {
-              kb_list[i] <- kb_tot
-              kb_tot <- kb_tot + lens[i]
-            }
-            
-            kb_list <- tibble(kb_dist = kb_list)
-            res <- bind_cols(input_sort, kb_list)
-            
-            res
-          }
-          
-          # Values used for window merging 
-          win_num <- length(seq(win_min, win_max))
-          mutate_num <- round(win_num / win_tot)
-          
-          # Merge windows  
-          res <- input_file %>% 
+            # Merge windows 
             mutate(
-              win_id = win_id - win_min,
-              win_id = floor(win_id / mutate_num),
-              win_len = (end - start) / 1000
+              mutate_num = round(win_count / win_tot),
+              win_id = floor(win_id / mutate_num)
             ) %>% 
-            group_by(name, key, win_id) %>% 
+            group_by(key, name, win_id) %>%
             summarize(
-              count = mean(count), 
-              win_len = sum(win_len)
+              count = mean(count),
+              kb_dist = min(kb_dist)
             ) %>%
-            group_by(key, name) %>%
-            nest() %>%
-            mutate(data = map(data, ~calc_kb(.x, id_col = "win_id", len_col = "win_len"))) %>%
-            unnest() %>% 
-            ungroup() %>% 
-            dplyr::select(-win_len, -win_id) %>% 
+            ungroup() %>%
+            dplyr::select(name, key, "win_id" = kb_dist, count) %>%
             
-            # Add pseudo count 
+            # Add pseudo count
             group_by(key, name) %>% 
             mutate(zero = ifelse(count == 0, T, F)) %>% 
             group_by(key, name, zero) %>% 
@@ -442,7 +515,7 @@ server <- function(input, output) {
             # Normalize by -DRB signal 
             separate(key, sep = "_", into = c("treatment", "tm")) %>% 
             spread(tm, count) %>%
-            gather(tm, count, -name, -kb_dist, -treatment, -con) %>% 
+            gather(tm, count, -name, -win_id, -treatment, -con) %>% 
             mutate(count = count / con) %>%
             dplyr::select(-con) %>% 
             unite(key, treatment, tm, sep = "_") %>% 
@@ -455,29 +528,26 @@ server <- function(input, output) {
               count = count / max_count,
               count = floor(count / 0.025) / 40
             ) %>%
-            dplyr::select(-max_count) %>%
-            rename(win_id = kb_dist)
+            dplyr::select(-max_count)
           
           res
         }
         
-        df_norm <- DRB_norm(df_merge, win_min = win_min, win_max = win_max, win_tot = 60)
+        df_norm <- DRB_norm(df_merge, win_tot = 60)
         
         
         ###############################
         # Identified wave coordinates #
         ###############################
         
-        # THIS VERSION DOES NOT RUN, NOT SURE WHY
-        find_waves <- function(input_file) {
+        # Function to run depmix
+        find_waves <- function(input) {
           
           # Function to retrieve group size
-          get_group_size <- function(input_file, col_name) {
+          get_group_size <- function(input, col_name) {
             
-            target_col <- sym(col_name)
-            
-            res <- input_file %>%
-              group_by(!!target_col) %>%
+            res <- input %>%
+              group_by_(col_name) %>%
               group_size() %>% 
               length()
             
@@ -485,127 +555,23 @@ server <- function(input, output) {
           }
           
           # Function to run depmix
-          run_depmix <- function(input_file, win_tot, gene_tot, prog_tot) {
+          run_depmix <- function(input, win_tot, gene_tot, prog_tot) {
             
-            table_sort <- input_file %>% 
-              arrange(name, win_id)
-            name <- table_sort$name
-            win_id <- table_sort$win_id
-            count <- table_sort$count
+            df_sort <- input %>% arrange(name, win_id)
+            name <- df_sort$name
+            win_id <- df_sort$win_id
+            count <- df_sort$count
             res <- rep(NA, gene_tot)
             
             for (i in 0:(gene_tot - 1)) {
               count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
-              count_in <- as.numeric(smooth(count_in))
+              
+              #count_in <- as.numeric(smooth(count_in)) # SMOOTHING
+              
               win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
               
               trstart_val <- c(0.7, 0.2, 0.002, 0.3)
               HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = trstart_val)
-              #HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = runif(4))
-              
-              tryCatch(
-                HMMfit <- fit(HMMmod, emc = em.control(rand = FALSE)),
-                error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
-              )
-              
-              HMMstate <- posterior(HMMfit)$state
-              
-              if (HMMstate %>% unique() %>% length() == 2) {
-                edge <- vector("double", win_tot)
-                
-                for (j in seq_along(HMMstate)) {
-                  if (j > 4) {
-                    sum_state <- sum(HMMstate[ (j - 4) : j ])  
-                    if (sum_state == 5) {
-                      edge[j] <- win_in[j]
-                    }
-                  }
-                }
-              }
-              
-              edge %<>%
-                na.omit() %>%
-                tail(1) 
-              
-              if (length(edge) == 1) {
-                res[i + 1] <- edge
-              }
-              
-              incProgress(1/prog_tot)
-            }
-            
-            res <- data.frame(unique(name), res)
-            colnames(res) <- c("name", "wave_edge")
-            
-            res
-          }
-          
-          withProgress(message = "Calculating rates...", {
-            
-            win_tot <- get_group_size(input_file, "win_id")
-            gene_tot <- get_group_size(input_file, "name")  
-            data_tot <- get_group_size(input_file, "key")
-            prog_tot <- data_tot * gene_tot
-            
-            shortened_df <- input_file %>% spread(key, count) 
-            
-            name_cols <- shortened_df %>% dplyr::select(name, win_id) 
-            
-            res <- shortened_df %>% 
-              dplyr::select(name) %>% 
-              unique()
-            
-            col_names <- "name"
-            
-            for (i in 3:ncol(shortened_df)) {
-              input_data <- bind_cols(name_cols, shortened_df[, i])
-              data_name <- names(input_data)[3]
-              col_names <- c(col_names, data_name)
-              input_data %<>% gather(key, count, -name, -win_id)
-              
-              waves <- run_depmix(input_data, win_tot, gene_tot, prog_tot)
-              
-              res %<>% left_join(waves, by = "name") 
-              colnames(res) <- col_names
-            }
-            
-            res
-          })    
-        }
-        
-        # Function to identify wave coordinates 
-        find_waves <- function(input_file) {
-          
-          # Function to retrieve group size
-          get_group_size <- function(input_file, col_name) {
-            
-            target_col <- sym(col_name)
-            
-            res <- input_file %>%
-              group_by(!!target_col) %>%
-              group_size() %>% 
-              length()
-            
-            res
-          }
-          
-          # Function to run depmix
-          run_depmix <- function(input_file, win_tot, gene_tot, prog_tot) {
-            
-            table_sort <- input_file %>% arrange(name, win_id)
-            name <- table_sort$name
-            win_id <- table_sort$win_id
-            count <- table_sort$count
-            res <- rep(NA, gene_tot)
-            
-            for (i in 0:(gene_tot - 1)) {
-              count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
-              count_in <- as.numeric(smooth(count_in))
-              win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
-              
-              trstart_val <- c(0.7, 0.2, 0.002, 0.3)
-              HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = trstart_val)
-              #HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = runif(4))
               
               tryCatch(
                 HMMfit <- fit(HMMmod, emc = em.control(rand = FALSE)),
@@ -622,24 +588,24 @@ server <- function(input, output) {
               HMMstate <- posterior(HMMfit)$state
               
               if (HMMstate %>% unique() %>% length() == 2) {
-                edge <- rep(NA, win_tot)
+                wave_edge <- rep(NA, win_tot)
                 
                 for (j in seq_along(HMMstate)) {
                   if (j > 4) {
                     sum_state <- sum(HMMstate[ (j - 4) : j ])  
                     if (sum_state == 5) {
-                      edge[j] <- win_in[j]
+                      wave_edge[j] <- win_in[j]
                     }
                   }
                 }
               }
               
-              edge %<>%
+              wave_edge %<>%
                 na.omit() %>%
                 tail(1) 
               
-              if (length(edge) == 1) {
-                res[i + 1] <- edge
+              if (length(wave_edge) == 1) {
+                res[i + 1] <- wave_edge
               }
               
               incProgress(1/prog_tot)
@@ -653,23 +619,25 @@ server <- function(input, output) {
           
           withProgress(message = "Calculating rates...", {
             
-            win_tot <- get_group_size(input_file, "win_id")
-            gene_tot <- get_group_size(input_file, "name")  
-            data_tot <- get_group_size(input_file, "key")
+            # Group sizes
+            win_tot <- get_group_size(input, "win_id")
+            gene_tot <- get_group_size(input, "name")  
+            data_tot <- get_group_size(input, "key")
             prog_tot <- data_tot * gene_tot
             
-            shortened_df <- input_file %>% spread(key, count) 
+            # Spread table
+            df_spread <- input %>% spread(key, count) 
             
-            name_cols <- shortened_df %>% dplyr::select(name, win_id) 
+            name_cols <- df_spread %>% dplyr::select(name, win_id) 
             
-            res <- shortened_df %>% 
+            res <- df_spread %>% 
               dplyr::select(name) %>% 
               unique()
             
             col_names <- "name"
             
-            for (i in 3:ncol(shortened_df)) {
-              input_data <- bind_cols(name_cols, shortened_df[, i])
+            for (i in 3:ncol(df_spread)) {
+              input_data <- bind_cols(name_cols, df_spread[, i])
               data_name <- names(input_data)[3]
               col_names <- c(col_names, data_name)
               input_data %<>% gather(key, count, -name, -win_id)
@@ -680,10 +648,123 @@ server <- function(input, output) {
               colnames(res) <- col_names
             }
           })
+          
           res
         }
         
         wave_coords <- find_waves(df_norm)
+        
+        
+        # Function to identify wave coordinates 
+        # find_waves <- function(input_file) {
+        #   
+        #   # Function to retrieve group size
+        #   get_group_size <- function(input_file, col_name) {
+        #     
+        #     target_col <- sym(col_name)
+        #     
+        #     res <- input_file %>%
+        #       group_by(!!target_col) %>%
+        #       group_size() %>% 
+        #       length()
+        #     
+        #     res
+        #   }
+        #   
+        #   # Function to run depmix
+        #   run_depmix <- function(input_file, win_tot, gene_tot, prog_tot) {
+        #     
+        #     table_sort <- input_file %>% arrange(name, win_id)
+        #     name <- table_sort$name
+        #     win_id <- table_sort$win_id
+        #     count <- table_sort$count
+        #     res <- rep(NA, gene_tot)
+        #     
+        #     for (i in 0:(gene_tot - 1)) {
+        #       count_in <- count[ (i * win_tot + 1) : (i * win_tot + win_tot) ]
+        #       count_in <- as.numeric(smooth(count_in))
+        #       win_in <- win_id[ (i * win_tot + 1) : (i * win_tot + win_tot) ] 
+        #       
+        #       trstart_val <- c(0.7, 0.2, 0.002, 0.3)
+        #       HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = trstart_val)
+        #       #HMMmod <- depmix(response = count_in ~ 1, data = data.frame(count_in), nstates = 2, trstart = runif(4))
+        #       
+        #       tryCatch(
+        #         HMMfit <- fit(HMMmod, emc = em.control(rand = FALSE)),
+        #         error = function(e) { cat("ERROR :", conditionMessage(e), "\n") }
+        #       )
+        #       
+        #       if (exists("HMMfit")) {
+        #         summary(HMMfit)
+        #         
+        #       } else {
+        #         next
+        #       }
+        #       
+        #       HMMstate <- posterior(HMMfit)$state
+        #       
+        #       if (HMMstate %>% unique() %>% length() == 2) {
+        #         edge <- rep(NA, win_tot)
+        #         
+        #         for (j in seq_along(HMMstate)) {
+        #           if (j > 4) {
+        #             sum_state <- sum(HMMstate[ (j - 4) : j ])  
+        #             if (sum_state == 5) {
+        #               edge[j] <- win_in[j]
+        #             }
+        #           }
+        #         }
+        #       }
+        #       
+        #       edge %<>%
+        #         na.omit() %>%
+        #         tail(1) 
+        #       
+        #       if (length(edge) == 1) {
+        #         res[i + 1] <- edge
+        #       }
+        #       
+        #       incProgress(1/prog_tot)
+        #     }
+        #     
+        #     res <- data.frame(unique(name), res)
+        #     colnames(res) <- c("name", "wave_edge")
+        #     
+        #     res
+        #   }
+        #   
+        #   withProgress(message = "Calculating rates...", {
+        #     
+        #     win_tot <- get_group_size(input_file, "win_id")
+        #     gene_tot <- get_group_size(input_file, "name")  
+        #     data_tot <- get_group_size(input_file, "key")
+        #     prog_tot <- data_tot * gene_tot
+        #     
+        #     shortened_df <- input_file %>% spread(key, count) 
+        #     
+        #     name_cols <- shortened_df %>% dplyr::select(name, win_id) 
+        #     
+        #     res <- shortened_df %>% 
+        #       dplyr::select(name) %>% 
+        #       unique()
+        #     
+        #     col_names <- "name"
+        #     
+        #     for (i in 3:ncol(shortened_df)) {
+        #       input_data <- bind_cols(name_cols, shortened_df[, i])
+        #       data_name <- names(input_data)[3]
+        #       col_names <- c(col_names, data_name)
+        #       input_data %<>% gather(key, count, -name, -win_id)
+        #       
+        #       waves <- run_depmix(input_data, win_tot, gene_tot, prog_tot)
+        #       
+        #       res %<>% left_join(waves, by = "name") 
+        #       colnames(res) <- col_names
+        #     }
+        #   })
+        #   res
+        # }
+        # 
         
         
         ###############################
@@ -783,9 +864,9 @@ server <- function(input, output) {
       )
       
       
-      ####################
-      # Creates metaplot #
-      ####################
+      ###################
+      # Create metaplot #
+      ###################
       
       # Reactive to retrieve info for selected genes
       rateTable_selected <- reactive({
@@ -1034,7 +1115,7 @@ server <- function(input, output) {
           rate_text_x <- as.numeric(max_x) * 0.745
           rate_text_y <- as.numeric(max_y) * 0.5
           
-          # Created metaplots
+          # Create metaplots
           DRB_metaplot(
             input_file, 
             sub_title = "",
@@ -1058,9 +1139,9 @@ server <- function(input, output) {
       output$metaPlot <- renderPlot(metaplotOut())
       
       
-      ###################
-      # Creates boxplot #
-      ###################
+      ##################
+      # Create boxplot #
+      ##################
       
       boxplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
