@@ -186,9 +186,9 @@ server <- function(input, output) {
         names(df_list) <- name_list
         
         
-        #################
-        # Merged tables #
-        #################
+        ################
+        # Merge tables #
+        ################
         
         # Function to merge tables 
         DRB_merge <- function(input, gene_list, win_min, win_max, merge_by = c("name", "win_id")) {
@@ -303,9 +303,9 @@ server <- function(input, output) {
         df_merge <- DRB_merge(df_list, gene_list, win_min, win_max, merge_by = c("name", "length", "win_id", "kb_dist"))
         
         
-        #####################
-        # Normalized tables #
-        #####################
+        ####################
+        # Normalize tables #
+        ####################
         
         # Function to normalize signal
         DRB_norm <- function(input, win_tot = 60) {
@@ -323,13 +323,13 @@ server <- function(input, output) {
               mutate_num = round(win_count / win_tot),
               win_id = floor(win_id / mutate_num)
             ) %>% 
-            group_by(key, name, win_id) %>%
+            group_by(key, name, win_id, length) %>%
             summarize(
               count = mean(count),
               kb_dist = min(kb_dist)
             ) %>%
             ungroup() %>%
-            dplyr::select(name, key, "win_id" = kb_dist, count) %>%
+            dplyr::select(name, key, length, "win_id" = kb_dist, count) %>%
             
             # Add pseudo count
             group_by(key, name) %>% 
@@ -349,7 +349,7 @@ server <- function(input, output) {
             # Normalize by -DRB signal 
             separate(key, sep = "_", into = c("treatment", "tm")) %>% 
             spread(tm, count) %>%
-            gather(tm, count, -name, -win_id, -treatment, -con) %>% 
+            gather(tm, count, -name, -win_id, -length, -treatment, -con) %>% 
             mutate(count = count / con) %>%
             dplyr::select(-con) %>% 
             unite(key, treatment, tm, sep = "_") %>% 
@@ -370,14 +370,14 @@ server <- function(input, output) {
         df_norm <- DRB_norm(df_merge, win_tot = 60)
         
         
-        ###############################
-        # Identified wave coordinates #
-        ###############################
+        #############################
+        # Identify wave coordinates #
+        #############################
         
         # Function to find waves using HMM
         find_waves <- function(input) {
           res <- input %>% 
-            group_by(key, name) %>%
+            group_by(key, name, length) %>%
             nest() %>%
             
             mutate(
@@ -417,21 +417,19 @@ server <- function(input, output) {
                   wave_edge
                   
                 } else {
-                  wave_edge <- NA
-                  wave_edge
+                  NA
                 }
                 
               })
             ) %>%
-            
+
             ungroup() %>%
             mutate(type = map(data, function(x) typeof(x))) %>%
             unnest(type) %>%
             filter(type != "NULL") %>%
             dplyr::select(-type) %>%
             rename(wave_edge = data) %>% 
-            unnest() #%>%
-            #filter(wave_edge > 0)
+            unnest() 
           
           res
         }
@@ -439,15 +437,9 @@ server <- function(input, output) {
         wave_coords <- find_waves(df_norm)
         
         
-        ###############################
-        # Calculated elongation rates #
-        ###############################
-        
-        col_names <- c(
-          "Name", "Long_name", 
-          tm1_name, tm2_name,
-          "Rate (kb/min)"
-        )
+        ##############################
+        # Calculate elongation rates #
+        ##############################
         
         # Function to calculate elongation rates 
         calc_rates <- function(input, time_1, time_2, col_names, win_min = 1, win_max = 200) {
@@ -482,18 +474,25 @@ server <- function(input, output) {
             res <- bind_cols(new_names, other_data)
           }
           
-          # wave_max <- (win_max - win_min) * win_len - 5
+          # Column names 
+          col_names <- c(
+            "Name", "Long_name", 
+            tm1_name, tm2_name,
+            "Rate (kb/min)"
+          )
           
+          # Calculate distance traveled
           tm <- time_2 - time_1
           
+          # Calculate elongation rate 
           rate_table <- input %>%
             spread(key, wave_edge) %>% 
             na.omit() %>% 
-            # filter(
-            #   tm_2 > tm_1,
-            #   tm_1 <= wave_max,
-            #   tm_2 <= wave_max
-            # ) %>%
+            filter(
+               tm_2 > tm_1,
+               tm_1 < length - 5,
+               tm_2 < length - 5
+            ) %>%
             mutate(
               rate = (tm_2 - tm_1) / tm,
               rate = round(rate, digits = 1),
@@ -501,8 +500,10 @@ server <- function(input, output) {
             ) %>%
             dplyr::select(long_name, name, tm_1, tm_2, rate)
           
+          # Extract gene symbols
           rate_table <- extract_gene_symbol(rate_table)
           
+          # Update column names 
           colnames(rate_table) <- col_names
           
           rate_table
@@ -555,15 +556,15 @@ server <- function(input, output) {
       metaplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
         
         # Function to calculate mean signal 
-        DRB_mean <- function(input_file, strand = F, relFreq = F) {
+        DRB_mean <- function(input, strand = F, relFreq = F) {
           
           if (strand == T) {
-            res <- input_file %>%
+            res <- input %>%
               separate(key, sep = "_", into = c("key", "rep", "strand", "type")) %>%
               unite(key, key, rep, type, sep = "_")
           } 
           
-          else res <- input_file
+          else res <- input
           
           if (relFreq == T) {
             res <- res %>%
@@ -588,7 +589,7 @@ server <- function(input, output) {
         
         # Function to create metaplots 
         DRB_metaplot <- function(
-          input_file, 
+          input, 
           plot_title = NULL, 
           sub_title = NULL, 
           y_title = NULL,
@@ -600,7 +601,7 @@ server <- function(input, output) {
           wave_1_lab <- str_c(wave_1, " kb")
           wave_2_lab <- str_c(wave_2, " kb")
           
-          meta_plot <- input_file %>%
+          meta_plot <- input %>%
             ggplot(aes(win_id, count, color = Timepoint)) +
             geom_line(size = 3) +
             geom_vline(
@@ -660,14 +661,8 @@ server <- function(input, output) {
         
         win_min <- input$win_min
         
-        df_merge <- as_data_frame(tablesOut()[[2]]) 
-        
-        win_len <- df_merge %>% 
-          mutate(len = (end - start) / 1000) %>% 
-          group_by(len) %>% 
-          summarize(n())
-        
-        win_len <- win_len$len 
+        df_merge <- data.frame(tablesOut()[[2]]) %>%
+          dplyr::select(name, key, "win_id" = kb_dist, count)
         
         # Create metaplot for selected genes
         if (!is.null(input$rateTable_rows_selected)) {
@@ -694,7 +689,6 @@ server <- function(input, output) {
               key = ifelse(key == "tm_1", tm1_name, key),
               key = ifelse(key == "tm_2", tm2_name, key),
               key = ifelse(key == "tm_con", "Control", key),
-              win_id = (win_id - win_min) * win_len, 
               key = fct_relevel(key, c("Control", tm1_name, tm2_name))
             ) %>%
             rename(Timepoint = key)
@@ -768,7 +762,6 @@ server <- function(input, output) {
               key = ifelse(key == "tm_1", tm1_name, key),
               key = ifelse(key == "tm_2", tm2_name, key),
               key = ifelse(key == "tm_con", "Control", key),
-              win_id = (win_id - win_min) * win_len,
               key = fct_relevel(key, c("Control", tm1_name, tm2_name))
             ) %>%
             rename(Timepoint = key)
