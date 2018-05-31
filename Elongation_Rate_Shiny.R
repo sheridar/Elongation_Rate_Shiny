@@ -191,7 +191,7 @@ server <- function(input, output) {
         ################
         
         # Function to merge tables 
-        DRB_merge <- function(input, gene_list, win_min, win_max, merge_by = c("name", "win_id")) {
+        DRB_merge <- function(input, gene_list, win_min, win_max, merge_by) {
           
           # Function to calculate distance from TSS 
           calc_kb <- function(input, id_col, len_col) {
@@ -323,13 +323,14 @@ server <- function(input, output) {
               mutate_num = round(win_count / win_tot),
               win_id = floor(win_id / mutate_num)
             ) %>% 
-            group_by(key, name, win_id, length) %>%
+            group_by(key, name, win_id) %>%
             summarize(
               count = mean(count),
               kb_dist = min(kb_dist)
             ) %>%
             ungroup() %>%
-            dplyr::select(name, key, length, "win_id" = kb_dist, count) %>%
+            #dplyr::select(name, key, "win_id" = kb_dist, count) %>%
+            dplyr::select(name, key, win_id, kb_dist, count) %>%
             
             # Add pseudo count
             group_by(key, name) %>% 
@@ -349,20 +350,21 @@ server <- function(input, output) {
             # Normalize by -DRB signal 
             separate(key, sep = "_", into = c("treatment", "tm")) %>% 
             spread(tm, count) %>%
-            gather(tm, count, -name, -win_id, -length, -treatment, -con) %>% 
+            #gather(tm, count, -name, -win_id, -treatment, -con) %>% 
+            gather(tm, count, -name, -win_id, -kb_dist, -treatment, -con) %>% 
             mutate(count = count / con) %>%
             dplyr::select(-con) %>% 
-            unite(key, treatment, tm, sep = "_") %>% 
+            unite(key, treatment, tm, sep = "_") #%>% 
             
             # Bin values using a range of 0 - 1.0 and step size of 0.025
-            group_by(name, key) %>%
-            mutate(max_count = max(count)) %>% 
-            ungroup() %>% 
-            mutate(
-              count = count / max_count,
-              count = floor(count / 0.025) / 40
-            ) %>%
-            dplyr::select(-max_count)
+            # group_by(name, key) %>%
+            # mutate(max_count = max(count)) %>% 
+            # ungroup() %>% 
+            # mutate(
+            #   count = count / max_count,
+            #   count = floor(count / 0.025) / 40
+            # ) %>%
+            # dplyr::select(-max_count)
           
           res
         }
@@ -375,9 +377,9 @@ server <- function(input, output) {
         #############################
         
         # Function to find waves using HMM
-        find_waves <- function(input) {
+        find_HMM_waves <- function(input) {
           res <- input %>% 
-            group_by(key, name, length) %>%
+            group_by(key, name) %>%
             nest() %>%
             
             mutate(
@@ -386,6 +388,7 @@ server <- function(input, output) {
                 df_sort <- x %>% arrange(win_id) 
                 
                 wins <- df_sort$win_id
+                wins_max <- wins[ (length(wins) - 5) ]
                 counts <- df_sort$count
                 
                 trstart_vals <- c(0.7, 0.2, 0.002, 0.3) 
@@ -403,18 +406,26 @@ server <- function(input, output) {
                   if (HMMstate %>% unique() %>% length() == 2) {
                     wave_edge <- NA
                     
-                    for (j in seq_along(HMMstate)) {
-                      if (j > 4) {
-                        sum_state <- sum(HMMstate[ (j - 4) : j ])  
+                    for (i in seq_along(HMMstate)) {
+                      if (i > 4) {
+                        sum_state <- sum(HMMstate[ (i - 4) : i ])  
                         
                         if (sum_state == 5) {
-                          wave_edge <- wins[j]
+                          wave_edge <- wins[i]
                         }
                       }
                     }
                   }
                   
-                  wave_edge
+                  if (is.na(wave_edge)) {
+                    wave_edge
+
+                  } else if (wave_edge < wins_max) {
+                    wave_edge
+                    
+                  } else {
+                    NA
+                  }
                   
                 } else {
                   NA
@@ -434,7 +445,40 @@ server <- function(input, output) {
           res
         }
         
-        wave_coords <- find_waves(df_norm)
+        #wave_coords <- find_HMM_waves(df_norm)
+        
+        # Function to find waves using arbitrary cutoff
+        find_waves <- function(input, sd_lim = 10) {
+          
+          res <- input %>%
+            group_by(name, key) %>%
+            mutate(
+              win_max = max(win_id),
+              win_min = win_max - 5,
+              win_type = ifelse(win_id <= win_min, "data", "background")
+            ) %>%                         
+            group_by(name, key, win_type) %>% # Calculated mean count and sd for each timepoint
+            mutate(
+              mean_count = mean(count), 
+              sd_count = sd(count),
+              limit = mean_count + (sd_lim * sd_count)
+            ) %>%
+            group_by(name, key) %>% 
+            mutate(limit = ifelse(win_id <= win_min, min(limit), limit)) %>%  
+            filter(count > limit) %>% # Identified highest bin where the count is greater than the limit
+            arrange(desc(win_id)) %>%
+            dplyr::slice(1) %>% 
+            ungroup() %>%
+            filter(
+              win_id > 0,
+              win_id < win_max
+            ) %>% 
+            dplyr::select(name, key, "wave_edge" = kb_dist)
+          
+          res
+        }
+        
+        wave_coords <- find_waves(df_norm, sd_lim = 10)
         
         
         ##############################
@@ -474,13 +518,6 @@ server <- function(input, output) {
             res <- bind_cols(new_names, other_data)
           }
           
-          # Column names 
-          col_names <- c(
-            "Name", "Long_name", 
-            tm1_name, tm2_name,
-            "Rate (kb/min)"
-          )
-          
           # Calculate distance traveled
           tm <- time_2 - time_1
           
@@ -488,22 +525,25 @@ server <- function(input, output) {
           rate_table <- input %>%
             spread(key, wave_edge) %>% 
             na.omit() %>% 
-            filter(
-               tm_2 > tm_1,
-               tm_1 < length - 5,
-               tm_2 < length - 5
-            ) %>%
+            filter(tm_2 > tm_1) %>%
             mutate(
               rate = (tm_2 - tm_1) / tm,
               rate = round(rate, digits = 1),
               long_name = name
             ) %>%
+            filter(rate > 0) %>% 
             dplyr::select(long_name, name, tm_1, tm_2, rate)
           
           # Extract gene symbols
           rate_table <- extract_gene_symbol(rate_table)
           
           # Update column names 
+          col_names <- c(
+            "Name", "Long_name", 
+            tm1_name, tm2_name,
+            "Rate (kb/min)"
+          )
+          
           colnames(rate_table) <- col_names
           
           rate_table
@@ -525,6 +565,7 @@ server <- function(input, output) {
           selection = list(mode = "multiple")
         )
       )
+      
       
       # Download table
       output$download <- downloadHandler(
