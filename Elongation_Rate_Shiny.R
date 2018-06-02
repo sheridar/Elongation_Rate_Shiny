@@ -582,40 +582,49 @@ server <- function(input, output) {
       })
       
       
-      # Function to simplify tables
-      simplify_tbls <- function(input) {
-        input %>% 
+      ####################################
+      # Output table of elongation rates #
+      ####################################
+      
+      # Function to simplify rate tables
+      simplify_rate_tbls <- function(input) {
+        input %>%
           dplyr::select(-win_id, -win_len, -kb_dist, -key, -count) %>%
           unique()
         
       }
       
-      HMM_rates <- simplify_tbls( tablesOut() [[1]] )  
-      simple_rates <- simplify_tbls( tablesOut() [[2]] )
-      merged_rates <- simplify_tbls( tablesOut() [[3]] )
-      
       # Output table 
       output$rateTable <- DT::renderDataTable(
         if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+          
+          HMM_rates <- simplify_rate_tbls( tablesOut() [[1]] )
+          
           datatable(HMM_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(2)))
+              columnDefs = list(list(visible = F, targets = c(1, 2)))
             ),
           
             selection = list(mode = "multiple")
           )
         } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+          
+          simple_rates <- simplify_rate_tbls( tablesOut() [[2]] )
+          
           datatable(simple_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(2)))
+              columnDefs = list(list(visible = F, targets = c(1, 2)))
             ),
                     
             selection = list(mode = "multiple")
           )          
         } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          
+          merged_rates <- simplify_rate_tbls( tablesOut() [[3]] )
+          
           datatable(merged_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(2)))
+              columnDefs = list(list(visible = F, targets = c(1, 2)))
             ),
                     
             selection = list(mode = "multiple")
@@ -623,32 +632,24 @@ server <- function(input, output) {
         }
       )
       
-      
       # Download table
       output$download <- downloadHandler(
-        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
-          filename = function() {
-            str_c("data-", Sys.Date(), ".txt")
-          },
-          
-          content = function(file) {
-            write_tsv( HMM_rates, path = file )
-          }
-        } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
-          filename = function() {
-            str_c("data-", Sys.Date(), ".txt")
-          },
-          
-          content = function(file) {
-            write_tsv( simple_rates, path = file )
-          }
-        } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
-          filename = function() {
-            str_c("data-", Sys.Date(), ".txt")
-          },
-          
-          content = function(file) {
-            write_tsv( merged_rates, path = file )
+        filename = function() {
+          str_c("data-", Sys.Date(), ".txt")
+        },
+        
+        content = function(file) {
+          if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+            HMM_rates <- simplify_rate_tbls( tablesOut() [[1]] )    
+            write_tsv(HMM_rates, path = file)
+            
+          } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+            simple_rates <- simplify_rate_tbls( tablesOut() [[2]] )    
+            write_tsv(simple_rates, path = file)
+            
+          } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+            merged_rates <- simplify_rate_tbls( tablesOut() [[3]] )
+            write_tsv(merged_rates, path = file)
           }
         }
       )
@@ -660,16 +661,46 @@ server <- function(input, output) {
       
       # Reactive to retrieve info for selected genes
       rateTable_selected <- reactive({
+        
         ids <- input$rateTable_rows_selected
-        gene_name <- tablesOut() [[1]] [ids, 1]
-        long_name <- tablesOut() [[1]] [ids, 2]
-        wave_1    <- tablesOut() [[1]] [ids, 3]
-        wave_2    <- tablesOut() [[1]] [ids, 4]
-        rate      <- tablesOut() [[1]] [ids, 5]
-        list(gene_name, long_name, wave_1, wave_2, rate)
+        
+        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          meta_tbl <- tablesOut() [[3]]
+          
+          sim_wave_1 <- meta_tbl [ids, 12]
+          sim_wave_2 <- meta_tbl [ids, 13]
+          sim_rate   <- meta_tbl [ids, 14]
+          
+        } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+            meta_tbl <- tablesOut() [[1]]
+            
+        } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+            meta_tbl <- tablesOut() [[2]]
+        }
+        
+        gene_name  <- meta_tbl [ids, 8]
+        long_name  <- meta_tbl [ids, 1]
+        wave_1 <- meta_tbl [ids, 9]
+        wave_2 <- meta_tbl [ids, 10]
+        rate   <- meta_tbl [ids, 11]
+        
+        output_list <- list(gene_name, long_name, wave_1, wave_2, rate)
+        
+        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          output_list <- c(output_list, sim_wave_1, sim_wave_2, sim_rate)
+        }
+        
+        output_list 
       })
       
       metaplotOut <- eventReactive(input$createPlot, ignoreInit = T, {
+        
+        # Function to simplify tables for metaplots 
+        simplify_meta_tbls <- function(input) {
+          input %>% 
+            dplyr::select(Long_name, key, kb_dist, count) %>%
+            rename(win_id = kb_dist)
+        }
         
         # Function to calculate mean signal 
         DRB_mean <- function(input, strand = F, relFreq = F) {
@@ -709,22 +740,25 @@ server <- function(input, output) {
           plot_title = NULL, 
           sub_title = NULL, 
           y_title = NULL,
-          wave_1, wave_2, rate, 
+          waves, rate, 
           text_pos, 
           plot_colors = c("#41ab5d", "#cb181d", "#225ea8")
           ) {
         
-          wave_1_lab <- str_c(wave_1, " kb")
-          wave_2_lab <- str_c(wave_2, " kb")
+          # Wave labels 
+          wave_labels <- map(waves, function(input) {
+            str_c(input, " kb")
+          })
           
           meta_plot <- input %>%
             ggplot(aes(win_id, count, color = Timepoint)) +
             geom_line(size = 3) +
             geom_vline(
-              xintercept = c(wave_1, wave_2), 
+              xintercept = waves, 
               size = 1, linetype = 2,
               color = plot_colors[2:3]
             ) +
+            
             labs(
               subtitle = sub_title,
               x = "Distance from TSS (kb)",
@@ -732,16 +766,16 @@ server <- function(input, output) {
             ) +
             scale_color_manual(values = plot_colors) +
             annotate("text", 
-              x = wave_1 + 5, 
+              x = waves[1] + 5, 
               y = text_pos, 
-              label = wave_1_lab,
+              label = wave_labels[1],
               size = 6,
               color = plot_colors[2]
             ) +
             annotate("text", 
-              x = wave_2 + 5, 
+              x = waves[2] + 5, 
               y = text_pos, 
-              label = wave_2_lab, 
+              label = wave_labels[2], 
               size = 6,
               color = plot_colors[3]
             ) +
@@ -762,6 +796,25 @@ server <- function(input, output) {
               legend.position = c(0.8, 0.8)
             )
           
+          if (length(wave_labels) == 4) {
+            meta_plot <- meta_plot +
+              scale_color_manual(values = plot_colors) +
+              annotate("text", 
+                x = waves[3] + 5, 
+                y = text_pos, 
+                label = wave_labels[3],
+                size = 6,
+                color = plot_colors[2]
+              ) +
+              annotate("text", 
+                x = waves[4] + 5, 
+                y = text_pos, 
+                label = wave_labels[4], 
+                size = 6,
+                color = plot_colors[3]
+              )
+          }
+          
           if (!is.null(plot_title[[1]])) {
             meta_plot <- meta_plot + labs(title = plot_title)
           }
@@ -777,30 +830,50 @@ server <- function(input, output) {
         
         win_min <- input$win_min
         
-        df_merge <- data.frame( tablesOut() [[3]] ) %>%
-          dplyr::select(name, key, "win_id" = kb_dist, count)
+        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+          df_merge <- simplify_meta_tbls( tablesOut() [[1]] )
+          
+        } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+          df_merge <- simplify_meta_tbls( tablesOut() [[2]] )
+          
+        } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          df_merge <- simplify_meta_tbls( tablesOut() [[3]] )
+        }
         
         # Create metaplot for selected genes
-        if (!is.null(input$rateTable_rows_selected)) {
+        if (!is.null(input$rateTable_rows_selected)) {          
           
           # Gene targets
-          gene_text <- as.character( rateTable_selected() [[1]] )
-          gene_targets <- as_data_frame( rateTable_selected() [[2]] ) %>% 
-            dplyr::select(name = 1) 
+          gene_text <- as.character( rateTable_selected() [[3]] )
+          gene_targets <- data.frame( rateTable_selected() [[1]] ) %>% 
+            dplyr::select("name" = 1) 
           
-          # Wave coordinates 
-          wave_1    <- round( mean( as.numeric( rateTable_selected() [[3]] )), digits = 1)
-          wave_2    <- round( mean( as.numeric( rateTable_selected() [[4]] )), digits = 1)
-          rate      <- as.numeric( rateTable_selected() [[5]] )
-          mean_rate <- round(mean(rate), digits = 1)
-          med_rate  <- round(median(rate), digits = 1)
+          # Wave coordinates
+          wave_1    <- rateTable_selected() [[4]]
+          wave_2    <- rateTable_selected() [[5]]
+          waves     <- round( mean( as.numeric( c( wave_1, wave_2 ))), digits = 1 )
+          rate      <- as.numeric( rateTable_selected() [[6]] )
+          mean_rate <- round( mean( rate ), digits = 1 )
+          med_rate  <- round( median( rate ), digits = 1 )
           
-          # Input file 
-          df_merge %<>% semi_join(gene_targets, by = "name")
+          if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+            sim_wave_1    <- rateTable_selected() [[7]]
+            sim_wave_2    <- rateTable_selected() [[8]]
+            sim_waves     <- round( mean( as.numeric( c( sim_wave_1, sim_wave_2 ))), digits = 1 )
+            sim_rate      <- as.numeric( rateTable_selected() [[9]] )
+            sim_mean_rate <- round( mean( sim_rate ), digits = 1 )
+            sim_med_rate  <- round( median( sim_rate ), digits = 1 )
+            waves <- c(waves, sim_waves)
+            mean_rate <- mean( c(mean_rate, sim_mean_rate) )
+            med_rate <- mean( c(med_rate, sim_med_rate) )
+          } 
+          
+          # Plot data 
+          df_merge %<>% semi_join(gene_targets, by = c("Long_name" = "name"))
           
           df_mean <- DRB_mean(df_merge)
           
-          input_file <- df_mean %>% 
+          plot_data <- df_mean %>% 
             mutate(
               key = ifelse(key == "tm_1", tm1_name, key),
               key = ifelse(key == "tm_2", tm2_name, key),
@@ -810,12 +883,12 @@ server <- function(input, output) {
             rename(Timepoint = key)
           
           # Coordinates for plot labels 
-          max_y <- input_file %>% 
+          max_y <- plot_data %>% 
             mutate(max_value = max(count)) %>%
             dplyr::select(max_value) %>% 
             unique()
           
-          max_x <- input_file %>%
+          max_x <- plot_data %>%
             mutate(max_value = max(win_id)) %>%
             dplyr::select(max_value) %>%
             unique()
@@ -827,23 +900,21 @@ server <- function(input, output) {
           # Created metaplots 
           if (length(gene_text) == 1) {
             DRB_metaplot(
-              input_file, 
+              plot_data, 
               plot_title = gene_text,
               sub_title = str_c(rate, " kb/min"),
               y_title = "",
-              wave_1 = wave_1, 
-              wave_2 = wave_2, 
+              waves = waves, 
               rate = rate, 
               text_pos = wave_text_y
             )
-          
+            
           } else {
             DRB_metaplot(
-              input_file, 
+              plot_data, 
               sub_title = "",
               y_title = "Average Signal",
-              wave_1 = wave_1, 
-              wave_2 = wave_2, 
+              waves = waves,
               rate = rate, 
               text_pos = wave_text_y
             ) +
@@ -902,8 +973,7 @@ server <- function(input, output) {
             input_file, 
             sub_title = "",
             y_title = "Average Signal",
-            wave_1 = wave_1, 
-            wave_2 = wave_2, 
+            waves = waves,  
             rate = rate, 
             text_pos = wave_text_y
           ) +
@@ -915,6 +985,8 @@ server <- function(input, output) {
               hjust = 0
             )
         }
+
+      
       })
       
       # Output metaplot
@@ -995,7 +1067,7 @@ server <- function(input, output) {
       output$boxPlot <- renderPlot(boxplotOut())
       
     },
-  
+
     # Return a safeError if a parsing error occurs
     error = function(e) {
       stop(safeError(e))
