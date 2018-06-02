@@ -108,6 +108,8 @@ ui <- fluidPage(
         column(2, actionButton("runAnalysis", "RUN")),
         column(2, downloadButton("download", "Export")),
         column(2, offset = 1, actionButton("createPlot", "Plot")),
+        column(2, checkboxInput("HMMcheckbox", "HMM", value = TRUE)),
+        column(2, checkboxInput("simpleCheckbox", "Simple", value = FALSE)),
         style = "height: 75px; background-color: white;"
       )
     )
@@ -155,8 +157,8 @@ server <- function(input, output) {
         
         time_1  <- input$time_1
         time_2  <- input$time_2
-        tm1_name <- str_c(time_1, " min")
-        tm2_name <- str_c(time_2, " min")
+        #tm1_name <- str_c(time_1, " min")
+        #tm2_name <- str_c(time_2, " min")
         
         win_min <- input$win_min
         win_max <- input$win_max
@@ -253,8 +255,8 @@ server <- function(input, output) {
           
           # Calculate gene length
           genes <- gene_list %>%
-            mutate(length = (end - start) / 1000) %>%
-            dplyr::select(name, length)
+            mutate(Length = (end - start) / 1000) %>%
+            dplyr::select(name, Length)
           
           # Filter and calculate distance from TSS 
           res <- map(input, function(x) {
@@ -288,7 +290,7 @@ server <- function(input, output) {
               ) %>%
               unnest() %>%
               ungroup() %>%
-              dplyr::select(name, length, win_id, kb_dist, count)
+              dplyr::select(name, Length, win_id, win_len, kb_dist, count)
             
             res
           })
@@ -300,7 +302,7 @@ server <- function(input, output) {
           res
         }
         
-        df_merge <- DRB_merge(df_list, gene_list, win_min, win_max, merge_by = c("name", "length", "win_id", "kb_dist"))
+        df_merge <- DRB_merge(df_list, gene_list, win_min, win_max, merge_by = c("name", "Length", "win_id", "win_len", "kb_dist"))
         
         
         ####################
@@ -312,7 +314,7 @@ server <- function(input, output) {
           
           # Remove windows that are past pAS
           res <- input %>% 
-            filter(kb_dist < length) %>% 
+            filter(kb_dist < Length) %>% 
             group_by(key, name) %>% 
             mutate(win_count = n()) %>%
             filter(win_count >= win_tot) %>% 
@@ -323,11 +325,15 @@ server <- function(input, output) {
               mutate_num = round(win_count / win_tot),
               win_id = floor(win_id / mutate_num)
             ) %>% 
+            mutate(count = count * win_len) %>% 
             group_by(key, name, win_id) %>%
-            summarize(
-              count = mean(count),
+            mutate(
+              count = sum(count),
+              win_len = sum(win_len),
               kb_dist = min(kb_dist)
             ) %>%
+            unique() %>% 
+            mutate(count = count / win_len) %>% 
             ungroup() %>%
             #dplyr::select(name, key, "win_id" = kb_dist, count) %>%
             dplyr::select(name, key, win_id, kb_dist, count) %>%
@@ -445,10 +451,10 @@ server <- function(input, output) {
           res
         }
         
-        #wave_coords <- find_HMM_waves(df_norm)
+        HMM_coords <- find_HMM_waves(df_norm)
         
         # Function to find waves using arbitrary cutoff
-        find_waves <- function(input, sd_lim = 10) {
+        find_simple_waves <- function(input, sd_lim = 10) {
           
           res <- input %>%
             group_by(name, key) %>%
@@ -478,7 +484,7 @@ server <- function(input, output) {
           res
         }
         
-        wave_coords <- find_waves(df_norm, sd_lim = 10)
+        simple_coords <- find_simple_waves(df_norm, sd_lim = 10)
         
         
         ##############################
@@ -486,7 +492,7 @@ server <- function(input, output) {
         ##############################
         
         # Function to calculate elongation rates 
-        calc_rates <- function(input, time_1, time_2, col_names, win_min = 1, win_max = 200) {
+        calc_rates <- function(input, time_1, time_2, prefix, win_min = 1, win_max = 200) {
           
           # Function to extract gene symbols from dataframe
           extract_gene_symbol <- function(input) {
@@ -497,7 +503,7 @@ server <- function(input, output) {
               
               str_len <- length(res[[1]])
               
-              res <- res[[1]][[str_len]]
+              res <- res[[1]] [[str_len]]
               
               res
             }
@@ -538,10 +544,14 @@ server <- function(input, output) {
           rate_table <- extract_gene_symbol(rate_table)
           
           # Update column names 
+          tm1_name <- str_c(prefix, time_1, "min", sep = " ")
+          tm2_name <- str_c(prefix, time_2, "min", sep = " ")
+          rate_name <- str_c(prefix, " rate (kb/min)")
+          
           col_names <- c(
             "Name", "Long_name", 
             tm1_name, tm2_name,
-            "Rate (kb/min)"
+            rate_name
           )
           
           colnames(rate_table) <- col_names
@@ -549,32 +559,97 @@ server <- function(input, output) {
           rate_table
         }
         
-        rate_table <- calc_rates(wave_coords, time_1, time_2, col_names, win_min, win_max)
+        HMM_rates <- calc_rates(HMM_coords, time_1, time_2, prefix = "HMM", win_min, win_max) 
         
-        list(rate_table, df_merge)
+        simple_rates <- calc_rates(simple_coords, time_1, time_2, prefix = "Simple", win_min, win_max)
+        
+        merged_rates <- left_join(HMM_rates, simple_rates, by = c("Long_name", "Name")) %>% 
+          na.omit()
+        
+        # Function to merge df_merge and rate tables 
+        merge_tbls <- function(meta_tbl, rate_tbl) {
+          meta_tbl %>%
+            rename(Long_name = name) %>% 
+            left_join(rate_tbl, by = c("Long_name")) %>%
+            na.omit() 
+        }
+        
+        HMM_meta <- merge_tbls(df_merge, HMM_rates)
+        simple_meta <- merge_tbls(df_merge, simple_rates)
+        merged_meta <- merge_tbls(df_merge, merged_rates)
+        
+        list(HMM_meta, simple_meta, merged_meta)
       })
       
       
+      # Function to simplify tables
+      simplify_tbls <- function(input) {
+        input %>% 
+          dplyr::select(-win_id, -win_len, -kb_dist, -key, -count) %>%
+          unique()
+        
+      }
+      
+      HMM_rates <- simplify_tbls( tablesOut() [[1]] )  
+      simple_rates <- simplify_tbls( tablesOut() [[2]] )
+      merged_rates <- simplify_tbls( tablesOut() [[3]] )
+      
       # Output table 
       output$rateTable <- DT::renderDataTable(
-        datatable(tablesOut()[[1]],
-          options = list(
-            columnDefs = list(list(visible = F, targets = c(2)))
-          ),
+        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+          datatable(HMM_rates,
+            options = list(
+              columnDefs = list(list(visible = F, targets = c(2)))
+            ),
           
-          selection = list(mode = "multiple")
-        )
+            selection = list(mode = "multiple")
+          )
+        } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+          datatable(simple_rates,
+            options = list(
+              columnDefs = list(list(visible = F, targets = c(2)))
+            ),
+                    
+            selection = list(mode = "multiple")
+          )          
+        } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          datatable(merged_rates,
+            options = list(
+              columnDefs = list(list(visible = F, targets = c(2)))
+            ),
+                    
+            selection = list(mode = "multiple")
+          )          
+        }
       )
       
       
       # Download table
       output$download <- downloadHandler(
-        filename = function() {
-          paste("data-", Sys.Date(), ".txt", sep="")
-        },
-        
-        content = function(file) {
-          write_tsv(tablesOut()[[1]], path = file)
+        if (input$HMMcheckbox == TRUE && input$simpleCheckbox == FALSE) {
+          filename = function() {
+            str_c("data-", Sys.Date(), ".txt")
+          },
+          
+          content = function(file) {
+            write_tsv( HMM_rates, path = file )
+          }
+        } else if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+          filename = function() {
+            str_c("data-", Sys.Date(), ".txt")
+          },
+          
+          content = function(file) {
+            write_tsv( simple_rates, path = file )
+          }
+        } else if (input$HMMcheckbox == TRUE && input$simpleCheckbox == TRUE) {
+          filename = function() {
+            str_c("data-", Sys.Date(), ".txt")
+          },
+          
+          content = function(file) {
+            write_tsv( merged_rates, path = file )
+          }
         }
       )
       
@@ -586,11 +661,11 @@ server <- function(input, output) {
       # Reactive to retrieve info for selected genes
       rateTable_selected <- reactive({
         ids <- input$rateTable_rows_selected
-        gene_name <- tablesOut()[[1]][ids, 1]
-        long_name <- tablesOut()[[1]][ids, 2]
-        wave_1    <- tablesOut()[[1]][ids, 3]
-        wave_2    <- tablesOut()[[1]][ids, 4]
-        rate      <- tablesOut()[[1]][ids, 5]
+        gene_name <- tablesOut() [[1]] [ids, 1]
+        long_name <- tablesOut() [[1]] [ids, 2]
+        wave_1    <- tablesOut() [[1]] [ids, 3]
+        wave_2    <- tablesOut() [[1]] [ids, 4]
+        rate      <- tablesOut() [[1]] [ids, 5]
         list(gene_name, long_name, wave_1, wave_2, rate)
       })
       
@@ -702,21 +777,21 @@ server <- function(input, output) {
         
         win_min <- input$win_min
         
-        df_merge <- data.frame(tablesOut()[[2]]) %>%
+        df_merge <- data.frame( tablesOut() [[3]] ) %>%
           dplyr::select(name, key, "win_id" = kb_dist, count)
         
         # Create metaplot for selected genes
         if (!is.null(input$rateTable_rows_selected)) {
           
           # Gene targets
-          gene_text <- as.character(rateTable_selected()[[1]])
-          gene_targets <- as_data_frame(rateTable_selected()[[2]]) %>% 
+          gene_text <- as.character( rateTable_selected() [[1]] )
+          gene_targets <- as_data_frame( rateTable_selected() [[2]] ) %>% 
             dplyr::select(name = 1) 
           
           # Wave coordinates 
-          wave_1    <- round( mean( as.numeric( rateTable_selected()[[3]] )), digits = 1)
-          wave_2    <- round( mean( as.numeric( rateTable_selected()[[4]] )), digits = 1)
-          rate      <- as.numeric(rateTable_selected()[[5]])
+          wave_1    <- round( mean( as.numeric( rateTable_selected() [[3]] )), digits = 1)
+          wave_2    <- round( mean( as.numeric( rateTable_selected() [[4]] )), digits = 1)
+          rate      <- as.numeric( rateTable_selected() [[5]] )
           mean_rate <- round(mean(rate), digits = 1)
           med_rate  <- round(median(rate), digits = 1)
           
@@ -784,11 +859,11 @@ server <- function(input, output) {
         } else {
           
           # Wave coordinates 
-          gene_name <- tablesOut()[[1]][, 1]
-          long_name <- tablesOut()[[1]][, 2]
-          wave_1    <- as.numeric(tablesOut()[[1]][, 3])
-          wave_2    <- as.numeric(tablesOut()[[1]][, 4])
-          rate      <- as.numeric(tablesOut()[[1]][, 5])
+          gene_name <- tablesOut() [[1]] [, 1]
+          long_name <- tablesOut() [[1]] [, 2]
+          wave_1    <- as.numeric( tablesOut() [[1]] [, 3] )
+          wave_2    <- as.numeric( tablesOut() [[1]] [, 4] )
+          rate      <- as.numeric( tablesOut() [[1]] [, 5] )
           
           wave_1    <- round( mean( wave_1 ), digits = 1)
           wave_2    <- round( mean( wave_2 ), digits = 1)
@@ -879,7 +954,7 @@ server <- function(input, output) {
             )
         }
         
-        rate_table <- as_data_frame(tablesOut()[[1]]) %>%
+        rate_table <- as_data_frame( tablesOut() [[1]] ) %>%
           dplyr::select(
             name = 1, long_name = 2,
             wave_1 = 3, wave_2 = 4, 
@@ -890,7 +965,7 @@ server <- function(input, output) {
         box_len <- dim(rate_table)[[1]]
         
         if (!is.null(input$rateTable_rows_selected)) {
-          new_points <- rateTable_selected()[[5]]
+          new_points <- rateTable_selected() [[5]]
           
           point_len <- length(new_points)
           
