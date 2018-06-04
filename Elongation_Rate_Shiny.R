@@ -137,9 +137,9 @@ server <- function(input, output) {
   
   tryCatch(
     {
-      #####################################
-      # Creates table of elongation rates #
-      #####################################
+      ####################################
+      # Create table of elongation rates #
+      ####################################
       
       tablesOut <- eventReactive(input$runAnalysis, ignoreInit = T, {
           
@@ -157,8 +157,6 @@ server <- function(input, output) {
         
         time_1  <- input$time_1
         time_2  <- input$time_2
-        #tm1_name <- str_c(time_1, " min")
-        #tm2_name <- str_c(time_2, " min")
         
         win_min <- input$win_min
         win_max <- input$win_max
@@ -169,9 +167,9 @@ server <- function(input, output) {
         req(time_2)
         
         
-        ##################
-        # Imported files #
-        ##################
+        ################
+        # Import files #
+        ################
         
         col_names <- c(
           "chrom", "start",
@@ -236,6 +234,21 @@ server <- function(input, output) {
             res
           }
           
+          # NOT SURE WHY THIS DOESN'T WORK
+          # Function to add "key" co lumns to list of dfs
+          # add_key <- function(input) {
+          # 
+          #   tbl_names <- names(input)
+          # 
+          #   res <- map2(input, tbl_names, function(x, y) {
+          #     x %>% 
+          #       rename_(.dots = setNames("count", y)) %>%
+          #       as_data_frame()
+          #   })
+          # 
+          #   res
+          # }
+          
           # Function to merge tables
           tbl_merge <- function(input, ...) {
             
@@ -255,7 +268,7 @@ server <- function(input, output) {
           
           # Calculate gene length
           genes <- gene_list %>%
-            mutate(Length = (end - start) / 1000) %>%
+            mutate(Length = round((end - start) / 1000), digits = 1) %>%
             dplyr::select(name, Length)
           
           # Filter and calculate distance from TSS 
@@ -302,7 +315,14 @@ server <- function(input, output) {
           res
         }
         
-        df_merge <- DRB_merge(df_list, gene_list, win_min, win_max, merge_by = c("name", "Length", "win_id", "win_len", "kb_dist"))
+        df_merge <- DRB_merge(
+          df_list, gene_list, 
+          win_min, win_max, 
+          merge_by = c(
+            "name", "Length", 
+            "win_id", "win_len", 
+            "kb_dist"
+          ))
         
         
         ####################
@@ -335,7 +355,6 @@ server <- function(input, output) {
             unique() %>% 
             mutate(count = count / win_len) %>% 
             ungroup() %>%
-            #dplyr::select(name, key, "win_id" = kb_dist, count) %>%
             dplyr::select(name, key, win_id, kb_dist, count) %>%
             
             # Add pseudo count
@@ -364,8 +383,8 @@ server <- function(input, output) {
             
             # Bin values using a range of 0 - 1.0 and step size of 0.025
             # group_by(name, key) %>%
-            # mutate(max_count = max(count)) %>% 
-            # ungroup() %>% 
+            # mutate(max_count = max(count)) %>%
+            # ungroup() %>%
             # mutate(
             #   count = count / max_count,
             #   count = floor(count / 0.025) / 40
@@ -409,8 +428,9 @@ server <- function(input, output) {
                   summary(HMMfit)
                   HMMstate <- posterior(HMMfit)$state
                   
-                  if (HMMstate %>% unique() %>% length() == 2) {
-                    wave_edge <- NA
+                  wave_edge <- NA
+                  
+                  if ( HMMstate %>% unique() %>% length() == 2 ) {
                     
                     for (i in seq_along(HMMstate)) {
                       if (i > 4) {
@@ -440,13 +460,17 @@ server <- function(input, output) {
               })
             ) %>%
 
-            ungroup() %>%
-            mutate(type = map(data, function(x) typeof(x))) %>%
-            unnest(type) %>%
-            filter(type != "NULL") %>%
-            dplyr::select(-type) %>%
-            rename(wave_edge = data) %>% 
-            unnest() 
+            unnest() %>% 
+            na.omit() %>% 
+            dplyr::rename(wave_edge = data)
+            
+            # ungroup() %>%
+            # mutate(type = map(data, function(x) typeof(x))) %>%
+            # unnest(type) %>%
+            # filter(type != "NULL") %>%
+            # dplyr::select(-type) %>%
+            # rename(wave_edge = data) %>% 
+            # unnest() 
           
           res
         }
@@ -601,7 +625,7 @@ server <- function(input, output) {
           
           datatable(HMM_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(1, 2)))
+              columnDefs = list(list(visible = F, targets = c(1)))
             ),
           
             selection = list(mode = "multiple")
@@ -612,7 +636,7 @@ server <- function(input, output) {
           
           datatable(simple_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(1, 2)))
+              columnDefs = list(list(visible = F, targets = c(1)))
             ),
                     
             selection = list(mode = "multiple")
@@ -623,7 +647,7 @@ server <- function(input, output) {
           
           datatable(merged_rates,
             options = list(
-              columnDefs = list(list(visible = F, targets = c(1, 2)))
+              columnDefs = list(list(visible = F, targets = c(1)))
             ),
                     
             selection = list(mode = "multiple")
@@ -731,6 +755,7 @@ server <- function(input, output) {
             sub_title = NULL, 
             y_title = NULL,
             waves, 
+            line_type = 2,
             text_pos, 
             plot_colors = c("#41ab5d", "#cb181d", "#225ea8")
           ) {
@@ -743,12 +768,12 @@ server <- function(input, output) {
             meta_plot <- input %>%
               ggplot(aes(win_id, count, color = Timepoint)) +
               geom_line(size = 3) +
+              scale_color_manual(values = plot_colors) +
               labs(
                 subtitle = sub_title,
                 x = "Distance from TSS (kb)",
                 y = y_title
               ) +
-              scale_color_manual(values = plot_colors) +
               annotate("text",
                 x = waves[[1]] + 5,
                 y = text_pos,
@@ -781,7 +806,7 @@ server <- function(input, output) {
               ) +
               geom_vline(
                 xintercept = waves[1:2],
-                size = 1, linetype = 2,
+                size = 1, linetype = line_type,
                 color = plot_colors[2:3]
               )
             
@@ -807,7 +832,6 @@ server <- function(input, output) {
                   color = plot_colors[3]
                 )
             }
-            
             
             if (!is.null(plot_title[[1]])) {
               meta_plot <- meta_plot + labs(title = plot_title)
@@ -863,6 +887,13 @@ server <- function(input, output) {
           rate_text_x <- as.numeric(max_x) * 0.745
           rate_text_y <- as.numeric(max_y) * 0.5
           
+          # Changed line type depending on wave-calling method
+          if (input$HMMcheckbox == FALSE && input$simpleCheckbox == TRUE) {
+            line_type <- 3
+          } else {
+            line_type <- 2
+          }
+            
           # Created metaplots 
           if (nrow(rate_in) == 1) {
             create_metaplots(
@@ -871,6 +902,7 @@ server <- function(input, output) {
               sub_title = str_c(mean_rate, " kb/min"),
               y_title = "",
               waves = waves, 
+              line_type = line_type,
               text_pos = wave_text_y
             )
             
@@ -880,6 +912,7 @@ server <- function(input, output) {
               sub_title = "",
               y_title = "Average Signal",
               waves = waves,
+              line_type = line_type,
               text_pos = wave_text_y
             ) +
               annotate("text", 
