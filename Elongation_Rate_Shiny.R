@@ -133,10 +133,12 @@ ui <- fluidPage(
 # Define server logic to read selected file ----
 server <- function(input, output) {
   
+  session$onSessionEnded(stopApp)
   options(shiny.maxRequestSize = 500 * 1024 ^ 2)
   
   tryCatch(
     {
+      
       ####################################
       # Create table of elongation rates #
       ####################################
