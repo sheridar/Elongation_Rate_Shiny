@@ -1,0 +1,211 @@
+---
+title: "splicing_corr.Rmd"
+output: html_document
+---
+
+# Setup
+```{r}
+
+# knitr options
+knitr::opts_chunk$set(echo = TRUE)
+
+# R packages 
+req_packages <- c(
+  "ComplexHeatmap", "depmixS4", 
+  "ggseqlogo",      "DESeq2",   
+  "gridExtra",      "ggpubr",
+  "cowplot",        "rlang",    
+  "Rcpp",           "valr",     
+  "knitr",          "magrittr", 
+  "broom",          "tidyverse", 
+  "scales",         "RMySQL",
+  "modelr"
+)
+
+# Bioconductor packages
+source("https://bioconductor.org/biocLite.R")
+Bioc_packages <- c("ComplexHeatmap", "DESeq2")
+
+# Identified missing packages 
+avail_packages <- installed.packages()[, "Package"]
+missing_packages <- req_packages[ !(req_packages %in% avail_packages) ]
+
+# Installed missing Bioc packages 
+Bioc_missing <- missing_packages[ missing_packages %in% Bioc_packages ]
+
+if (length(Bioc_missing)) {
+  biocLite(pkgs = Bioc_missing)
+}
+
+# Installed other missing packages 
+other_missing <- missing_packages[ !missing_packages %in% Bioc_packages ]
+
+if (length(other_missing)) {
+  install.packages(missing_packages)
+}
+
+# Loaded packages 
+for (i in seq_along(req_packages)) {
+  require(req_packages[i], character.only = T)
+}
+
+# Directories
+# home_dir <- "/beevol/home/sheridanr/TFIISmt_paper/"
+home_dir <- "/home/rmsheridan/GitHub/TFIISmt_paper/"
+results_dir   <- str_c(home_dir, "results/")
+data_dir      <- str_c(home_dir, "data/")
+gene_list_dir <- str_c(data_dir, "gene_lists/")
+R_list_dir    <- str_c(results_dir,"R_gene_lists/")
+
+# Theme info
+theme_info <- theme_classic() +
+  theme(
+    #strip.text.x = element_text(size = 15)
+    axis.line = element_line(size = 2),
+    axis.ticks = element_line(size = 2),
+    axis.ticks.length = unit(10, units = "point"),
+    axis.text = element_text(size = 15, face = "bold", color = "black")
+  )
+
+# Plot colors 
+color_list <- list(
+  purple_1 = "#253494",
+  orange_1 = "#fe9929",
+  orange_2 = "#ec7014",
+  brown_1  = "#cc4c02",
+  brown_2  = "#993404",
+  green_1  = "#78c679",
+  green_2  = "#41ab5d",
+  green_3  = "#238443",
+  blue_1 = "#3288bd",
+  blue_2 = "#225ea8",
+  blue_3 = "#08519c",
+  aqua_1 = "#41b6c4",
+  grey_1 = "#969696",
+  grey_2 = "#737373",
+  grey_3 = "#525252",
+  black  = "black",
+  red_1  = "#fc4e2a",
+  red_2  = "#e31a1c",
+  red_3  = "#bd0026"
+)
+
+```
+
+## Imported bedGraphs
+```{r}
+
+setwd("~/")
+
+col_names <- c(
+  "chrom", "start",
+  "end",   "name",
+  "count"
+)
+
+test_bg <- read_tsv("test.bedGraph", col_names)
+
+```
+
+## Created vector of counts for each gene
+```{r}
+
+# bedtools intersect -wo -a hg19_introns.bed -b RS-TFIISDN-minusDoxy-minusDMOG-BRUseq_S14_L006_R1_001.N.bedGraph.gz \
+#   | awk -v OFS="\t" '{ print $1, $8, $9, $1":"$2"-"$3"*"$4, $10 }' \
+#   > test.bedGraph
+
+# Function to create vector of read counts for every base pair position on every gene 
+splitBedGraph <- cppFunction(
+  'DataFrame splitBedGraph(DataFrame inputBed) {
+    
+      std::vector<int> startCoords = inputBed["start"];
+      std::vector<int> endCoords   = inputBed["end"];
+      std::vector<double> counts   = inputBed["count"];
+
+      int N = startCoords.size();
+    
+      std::vector<double> countVec;
+      std::vector<double> startVec;
+
+      for (int i = 0; i < N; i++) {
+        int coordSize = endCoords[i] - startCoords[i];
+      
+        for (int j = 0; j < coordSize; j++) {
+          countVec.push_back(counts[i]);
+          startVec.push_back(startCoords[i] + j);
+        }
+      }
+
+      DataFrame dfOut = DataFrame::create(
+        Named("start") = startVec,
+        Named("count") = countVec
+      );
+
+      return dfOut;
+    }'
+)
+
+out_tbl <- test_bg %>%
+  group_by(name) %>%
+  mutate(tot_count = sum(count)) %>%
+  ungroup() %>% 
+  filter(tot_count > 0) %>%
+  nest(chrom, start, end, count) %>%
+
+  separate(name, sep = "\\*", into = c("coords", "name")) %>% 
+  separate(coords, sep = ":", into = c("chrom", "coords")) %>%
+  separate(coords, sep = "-", into = c("start", "end")) %>% 
+  
+  arrange(desc(tot_count)) %>%
+  head(10000) %>% 
+  
+  mutate(
+    data = map(data, function(x) splitBedGraph(x)), 
+    model = map(data, function(x) lm(count ~ start, data = x)),
+    rsqr = map2(model, data, function(x, y) rsquare(x, y)),
+    eq = map(model, function(x) {
+      coefs <- coef(x)
+      coef_1 <- round(coefs[1], digits = 1)
+      coef_2 <- round(coefs[2], digits = 6)
+      str_c("y = ", coef_2, "x + ", coef_1)
+    }),
+    plot = pmap(list(data, eq, rsqr), function(dat, e, r2) {
+      r2 <- round(r2, digits = 5)
+      plot_lab <- str_c(e, "\nr2 = ", r2)
+      
+      min_x <- min(dat$start)
+      max_y <- max(dat$count)
+      x_range <- max(dat$start) - min_x
+      y_range <- max_y - min(dat$count)
+      
+      y_lim <- max_y + (y_range * 0.1)
+      y_range <- y_lim - min(dat$count)
+      
+      dat %>%
+        ggplot(aes(start, count)) +
+        geom_point(size = 2, alpha = 0.5) +
+        geom_smooth(method = "lm", se = F, linetype = 2, color = "red") +
+        labs(y = "Count") +
+        ylim(0, y_lim) +
+        theme_info +
+        theme(
+          axis.title = element_text(size = 16, face = "bold"),
+          axis.title.x = element_blank(),
+          axis.text = element_text(size = 12)
+        ) +
+        annotate(
+          geom = "text",
+          label = plot_lab,
+          x = min_x + (x_range * 0.01),
+          y = y_lim - (y_range * 0.02),
+          hjust = 0,
+          size = 4,
+          fontface = 2
+        ) 
+    })
+  ) %>%
+  unnest(rsqr)
+
+```
+
+
