@@ -133,7 +133,7 @@ ui <- fluidPage(
 # Define server logic to read selected file ----
 server <- function(input, output) {
   
-  session$onSessionEnded(stopApp)
+  #session$onSessionEnded(stopApp)
   options(shiny.maxRequestSize = 500 * 1024 ^ 2)
   
   tryCatch(
@@ -237,7 +237,7 @@ server <- function(input, output) {
           }
           
           # NOT SURE WHY THIS DOESN'T WORK
-          # Function to add "key" co lumns to list of dfs
+          # Function to add "key" columns to list of dfs
           # add_key <- function(input) {
           # 
           #   tbl_names <- names(input)
