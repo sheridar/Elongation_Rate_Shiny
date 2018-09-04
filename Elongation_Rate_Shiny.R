@@ -414,8 +414,8 @@ server <- function(input, output) {
                 
                 df_sort <- x %>% arrange(win_id) 
                 
-                wins <- df_sort$win_id
-                wins_max <- wins[ (length(wins) - 5) ]
+                kb_dist <- df_sort$kb_dist
+                kb_max <- kb_dist[ (length(kb_dist) - 5) ]
                 counts <- df_sort$count
                 
                 trstart_vals <- c(0.7, 0.2, 0.002, 0.3) 
@@ -439,7 +439,7 @@ server <- function(input, output) {
                         sum_state <- sum(HMMstate[ (i - 4) : i ])  
                         
                         if (sum_state == 5) {
-                          wave_edge <- wins[i]
+                          wave_edge <- kb_dist[i]
                         }
                       }
                     }
@@ -448,7 +448,7 @@ server <- function(input, output) {
                   if (is.na(wave_edge)) {
                     wave_edge
 
-                  } else if (wave_edge < wins_max) {
+                  } else if (wave_edge < kb_max) {
                     wave_edge
                     
                   } else {
