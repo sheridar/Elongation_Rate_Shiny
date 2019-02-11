@@ -181,7 +181,8 @@ server <- function(input, output) {
         )
     
         file_list <- list(con_path, file1_path, file2_path)
-        df_list <- map(file_list, function(x) read_tsv(x, col_names))
+        # df_list <- map(file_list, function(x) read_tsv(x, col_names))
+        df_list <- map(file_list, ~ read_tsv(.x, col_names))
         gene_list <- read_tsv(genes_path, col_names[1:4])
         
         name_list <- list("tm_con", "tm_1", "tm_2")
@@ -274,10 +275,10 @@ server <- function(input, output) {
             dplyr::select(name, Length)
           
           # Filter and calculate distance from TSS 
-          res <- map(input, function(x) {
+          res <- map(input, ~ {
             
             # Filter by win_min and win_max
-            res <- x %>% 
+            res <- .x %>% 
               left_join(genes, by = "name") %>%
               na.omit() %>% 
               dplyr::select(-strand) %>% 
@@ -410,9 +411,9 @@ server <- function(input, output) {
             nest() %>%
             
             mutate(
-              data = map(data, function(x) {
+              data = map(data, ~ {
                 
-                df_sort <- x %>% arrange(win_id) 
+                df_sort <- .x %>% arrange(win_id) 
                 
                 kb_dist <- df_sort$kb_dist
                 kb_max <- kb_dist[ (length(kb_dist) - 5) ]
